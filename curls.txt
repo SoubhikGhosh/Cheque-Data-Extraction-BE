@@ -1,0 +1,7 @@
+curl -X POST \
+  -F "files=@/path/to/your/cheques.zip" \
+  http://localhost:8080/upload
+
+curl http://localhost:8080/status/{job_id}
+
+curl -O -J -L http://localhost:8080/download/{job_id}
