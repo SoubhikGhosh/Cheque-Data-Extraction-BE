@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+psycopg2-binary
+google-generativeai
+pillow
+pdf2image
+numpy
+python-dateutil
+poppler-utils
+json5
