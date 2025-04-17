@@ -423,9 +423,47 @@ class ChequeProcessor:
         
         return results
     
+def crop_image_with_coordinates(image_path, coordinates, output_size=(300, 300)):
+    """
+    Crop an image based on normalized coordinates.
+    
+    Args:
+        image_path (str): Path to the original image
+        coordinates (dict): Normalized coordinates (x1, y1, x2, y2)
+        output_size (tuple): Desired output size for the cropped image
+    
+    Returns:
+        bytes: Cropped image as bytes
+    """
+    try:
+        # Open the image
+        with Image.open(image_path) as img:
+            # Get image dimensions
+            width, height = img.size
+            
+            # Convert normalized coordinates to pixel coordinates
+            x1 = int(coordinates['x1'] * width)
+            y1 = int(coordinates['y1'] * height)
+            x2 = int(coordinates['x2'] * width)
+            y2 = int(coordinates['y2'] * height)
+            
+            # Crop the image
+            cropped_img = img.crop((x1, y1, x2, y2))
+            
+            # Resize while maintaining aspect ratio
+            cropped_img.thumbnail(output_size, Image.LANCZOS)
+            
+            # Save to bytes
+            img_byte_arr = io.BytesIO()
+            cropped_img.save(img_byte_arr, format='PNG')
+            return img_byte_arr.getvalue()
+    except Exception as e:
+        print(f"Error cropping image: {e}")
+        return None
+    
 def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id: str):
     """
-    Process multiple zip files and generate Excel report using Gemini's multimodal capabilities with parallel processing.
+    Process multiple zip files and generate Excel report with signature image cropping.
     
     Args:
         file_contents (List[bytes]): List of zip file contents
@@ -450,6 +488,10 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
         temp_dir = tempfile.mkdtemp(prefix=f"job_{job_id}_")
         output_dir = os.path.join(temp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
+        
+        # Create a directory for temporary signature images
+        signature_dir = os.path.join(output_dir, "signatures")
+        os.makedirs(signature_dir, exist_ok=True)
         
         # Dictionary to store results for each folder
         folder_results = {}
@@ -547,13 +589,41 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         
                         # Extract and store fields
                         for field in result.get("extracted_fields", []):
-                            folder_results[folder_name].append({
+                            field_entry = {
                                 "filepath": file_path,
                                 "field_name": field.get("field_name", ""),
                                 "value": field.get("value", ""),
                                 "confidence": field.get("confidence", 0.0),
                                 "reason": field.get("reason", "")
-                            })
+                            }
+                            
+                            # Special handling for signature coordinates
+                            if field.get("field_name") == "signature_coordinates":
+                                try:
+                                    # Parse coordinates
+                                    coords = json.loads(field.get("value", "{}"))
+                                    
+                                    # Crop signature image
+                                    signature_img = crop_image_with_coordinates(
+                                        file_path, 
+                                        coords
+                                    )
+                                    
+                                    if signature_img:
+                                        # Generate unique filename for signature
+                                        signature_filename = f"signature_{processed_files}_{uuid.uuid4()}.png"
+                                        signature_path = os.path.join(signature_dir, signature_filename)
+                                        
+                                        # Save signature image
+                                        with open(signature_path, 'wb') as sig_file:
+                                            sig_file.write(signature_img)
+                                        
+                                        # Add signature image path to field entry
+                                        field_entry["signature_image_path"] = signature_path
+                                except Exception as e:
+                                    logger.error(f"Error processing signature for {file_path}: {e}")
+                            
+                            folder_results[folder_name].append(field_entry)
                         
                         processed_files += 1
                         
@@ -583,6 +653,8 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
         
         # Generate comprehensive Excel report
         excel_path = os.path.join(output_dir, f"cheque_extraction_results_{job_id}.xlsx")
+        
+        # Create Excel writer with xlsxwriter engine to support images
         with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
             # Process results for each folder
             for folder_name, results in folder_results.items():
@@ -591,6 +663,8 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                 
                 # Prepare data for DataFrame
                 filepath_groups = {}
+                signature_images = {}
+                
                 for item in results:
                     filepath = item["filepath"]
                     if filepath not in filepath_groups:
@@ -599,6 +673,11 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                     # Add field details
                     if "field_name" in item:
                         field_name = item["field_name"]
+                        
+                        # Store signature image path if available
+                        if "signature_image_path" in item:
+                            signature_images[filepath] = item["signature_image_path"]
+                        
                         filepath_groups[filepath][field_name] = item["value"]
                         filepath_groups[filepath][f"{field_name}_conf"] = item["confidence"]
                         
@@ -628,9 +707,36 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                     sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
                     sheet_name = (sheet_name[:28] + '...') if len(sheet_name) > 31 else sheet_name
                     
-                    # Write to Excel
+                    # Write to Excel with image support
                     if not df.empty:
+                        # Write DataFrame to Excel
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        
+                        # Get the xlsxwriter workbook and worksheet objects
+                        workbook = writer.book
+                        worksheet = writer.sheets[sheet_name]
+                        
+                        # Add image column for signatures
+                        signature_img_col = len(cols)  # Add new column after existing columns
+                        
+                        # Add signature images
+                        for idx, row in df.iterrows():
+                            filepath = row['filepath']
+                            
+                            # Check if signature image exists for this filepath
+                            if filepath in signature_images:
+                                try:
+                                    img_path = signature_images[filepath]
+                                    
+                                    # Insert image into worksheet
+                                    worksheet.insert_image(
+                                        idx + 1,  # Excel rows are 1-indexed, and first row is header
+                                        signature_img_col, 
+                                        img_path,
+                                        {'x_scale': 0.5, 'y_scale': 0.5}  # Adjust scaling as needed
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Error inserting signature image for {filepath}: {e}")
         
         # Update job status
         job_end_time = time.time()
@@ -641,7 +747,8 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
             "total_files": total_files,
             "processed_files": processed_files,
             "output_file_path": excel_path,
-            "processing_time": job_end_time - job_start_time
+            "processing_time": job_end_time - job_start_time,
+            "signature_directory": signature_dir  # Keep track of generated signature images
         }
         
         logger.info(f"Job {job_id} completed. Output file: {excel_path}")
