@@ -7,6 +7,6 @@ openpyxl
 pillow
 pytesseract
 pdf2image
-python-uuid
+uuid
 requests
 google-cloud-aiplatform
