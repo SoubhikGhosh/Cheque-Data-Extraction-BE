@@ -86,39 +86,25 @@ safety_settings = [
     ),
 ]
 
-# Cheque types
-CHEQUE_TYPES = [
-    "personal_cheque",
-    "cashier_cheque",
-    "bank_cheque",
-    "traveler_cheque",
-    "corporate_cheque",
-    "foreign_cheque"
-]
-
 # Field definitions for cheques
 FIELDS = [
-    {"id": 1, "name": "cheque_number", "source": "all_cheques"},
-    {"id": 2, "name": "bank_name", "source": "all_cheques"},
-    {"id": 3, "name": "bank_branch", "source": "all_cheques"},
-    {"id": 4, "name": "account_number", "source": "all_cheques"},
-    {"id": 5, "name": "date", "source": "all_cheques"},
-    {"id": 6, "name": "payee_name", "source": "all_cheques"},
-    {"id": 7, "name": "amount_words", "source": "all_cheques"},
-    {"id": 8, "name": "amount_numeric", "source": "all_cheques"},
-    {"id": 9, "name": "currency", "source": "all_cheques"},
-    {"id": 10, "name": "issuer_name", "source": "all_cheques"},
-    {"id": 11, "name": "routing_number", "source": "all_cheques"},
-    {"id": 12, "name": "micr_code", "source": "all_cheques"},
-    {"id": 13, "name": "cheque_type", "source": "all_cheques"},
-    {"id": 14, "name": "country_of_origin", "source": "all_cheques"},
-    {"id": 15, "name": "is_valid", "source": "all_cheques"},
-    {"id": 16, "name": "signature_present", "source": "all_cheques"}
+    {"id": 1, "name": "bank_name"},
+    {"id": 2, "name": "bank_branch"},
+    {"id": 3, "name": "account_number"},
+    {"id": 4, "name": "date"},
+    {"id": 5, "name": "payee_name"},
+    {"id": 6, "name": "amount_words"},
+    {"id": 7, "name": "amount_numeric"},
+    {"id": 8, "name": "currency"},
+    {"id": 9, "name": "issuer_name"},
+    {"id": 10, "name": "micr_code"},
+    {"id": 11, "name": "signature_present"},
+    {"id": 12, "name": "IFSC"}
 ]
 
 # ============ NEW PERFORMANCE OPTIMIZATION CONSTANTS ============
-MAX_WORKERS = 20
-BATCH_SIZE = 10
+MAX_WORKERS =80
+BATCH_SIZE = 40
 
 # Create a thread pool executor at the module level with increased workers
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -126,14 +112,6 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
 # Keep a dictionary of futures for tracking
 active_tasks = {}
 processed_jobs = {}
-
-# Create a mapping of document types to their fields
-DOCUMENT_FIELDS = {}
-for field in FIELDS:
-    doc_type = field["source"]
-    if doc_type not in DOCUMENT_FIELDS:
-        DOCUMENT_FIELDS[doc_type] = []
-    DOCUMENT_FIELDS[doc_type].append(field["name"])
 
 class ChequeProcessor:
     """Helper class for cheque processing operations using Vertex AI's multimodal capabilities"""
@@ -152,31 +130,24 @@ class ChequeProcessor:
             
             # For images, process directly
             if file_type.lower() in ["image/jpeg", "image/jpg", "image/png", "image/tiff"]:
-                # Extract cheque type from filename instead of using classification prompt
-                cheque_type, confidence = ChequeProcessor._classify_by_filename(os.path.basename(file_path))
-                logger.info(f"Classified {file_path} as {cheque_type} with confidence {confidence}")
                 
                 # Now extract text and fields based on the document type
-                doc_fields = DOCUMENT_FIELDS.get("all_cheques", [])
+                doc_fields = [field['name'] for field in FIELDS]
                 fields_str = ", ".join(doc_fields)
 
                 field_descriptions = {
-                    "cheque_number": "The unique identification number printed on the cheque",
-                    "bank_name": "The name of the bank issuing the cheque",
-                    "bank_branch": "The specific branch of the bank where the account is maintained",
+                    "bank_name": "The name of the bank issuing the cheque, always on the top left of the cheque, in case there are multiple ALWAYS go for the one on the top left corner. Use contextual understanding about major Indian and foreign banks and pattern recognition to correctly approximate if the image is unclear.",
+                    "bank_branch": "The specific branch of the bank where the account is maintained, generally just below the bank name",
                     "account_number": "The bank account number from which the cheque is drawn, also denoted by A/C No.",
-                    "date": "The date when the cheque was issued (in YYYY-MM-DD format)",
-                    "payee_name": "The name of the person or entity to whom the cheque is payable",
-                    "amount_words": "The amount written in words on the cheque",
-                    "amount_numeric": "The amount written in numeric digits on the cheque",
-                    "currency": "The currency of the cheque (e.g., INR, USD, EUR)",
-                    "issuer_name": "The name of the person or entity issuing the cheque",
-                    "routing_number": "The bank routing number (especially important for international cheques)",
-                    "micr_code": "Magnetic Ink Character Recognition code printed on the bottom of the cheque",
-                    "cheque_type": "Type of cheque (personal, cashier, bank, traveler, corporate, foreign)",
-                    "country_of_origin": "The country where the cheque was issued",
-                    "is_valid": "Whether the cheque appears to be valid (based on standard checks)",
-                    "signature_present": "Whether a signature is present on the cheque"
+                    "date": "The date when the cheque was issued (in YYYY-MM-DD format), generally on the top right",
+                    "payee_name": "The name of the person or entity to whom the cheque is payable, generally handwritten, below the Bank Name and details after the word PAY or pay or Pay",
+                    "amount_words": "The amount written in words on the cheque, generally handwritten, below payee name, maybe spread over 2 lines",
+                    "amount_numeric": "The amount written in numeric digits on the cheque, generally handwritten in the right middle section",
+                    "currency": "The currency of the cheque (e.g., INR, USD, EUR), may also have to classify basis currency sign",
+                    "issuer_name": "The name of the person or entity issuing the cheque, always just below or above the signature",
+                    "micr_code": "Magnetic Ink Character Recognition code printed on the bottom of the cheque, always printed",
+                    "signature_present": "Whether a signature is present on the cheque, always handwritten ink free flowing strokes on the bottom right area above micr code. use only YES or NO.",
+                    "IFSC": "The IFS Code assigned to a particular branch of a bank where the cheque was issued from, denoted by IFS Code or IFSC or IFSC Code"
                 }
 
                 # Create field list with descriptions
@@ -188,7 +159,7 @@ class ChequeProcessor:
                 fields_list = "\n".join(fields_with_descriptions)
   
                 extraction_prompt = f"""
-                You are a specialized financial document analyzer with expertise in extracting information from {cheque_type.replace("_", " ").title()} documents.
+                You are a specialized financial document analyzer with expertise in extracting information from scanned cheque documents.
             
                 Extract the following fields from the cheque with maximum precision:
                 {fields_list}
@@ -207,11 +178,6 @@ class ChequeProcessor:
                 - The exact text segment from which you extracted the information
                 - A reason if the field couldn't be extracted
                 
-                Additional checks:
-                - Validate the cheque number format
-                - Check for common signs of cheque validity
-                - Identify potential fraud indicators
-                
                 Format your response as a JSON with two parts:
                 1. "full_text": The complete text from the cheque
                 2. "extracted_fields": An array of objects with field_name, value, and confidence
@@ -226,7 +192,7 @@ class ChequeProcessor:
                 
                 extraction_json_str = extraction_response.text.strip()
                 logger.info(f"Raw extraction response length: {len(extraction_json_str)}")
-                logger.info(f"First 500 chars of extraction response: {extraction_json_str[:500]}...")
+                logger.info(f"First 500 chars of extraction response: {extraction_json_str}...")
                 
                 # Clean up the JSON string to handle markdown code blocks and any text before/after
                 extraction_json_str = ChequeProcessor._extract_json_from_text(extraction_json_str)
@@ -256,8 +222,6 @@ class ChequeProcessor:
                 
                 # Combine the results
                 result = {
-                    "document_type": cheque_type,
-                    "confidence": confidence,
                     "text": extraction_result.get("full_text", ""),
                     "extracted_fields": extraction_result.get("extracted_fields", []),
                     "pages": [{"page_num": 1, "text": extraction_result.get("full_text", "")}]
@@ -269,8 +233,6 @@ class ChequeProcessor:
                     "error": f"Unsupported file type: {file_type}",
                     "text": "",
                     "pages": [],
-                    "document_type": "unknown",
-                    "confidence": 0.0,
                     "extracted_fields": []
                 }
                 
@@ -287,51 +249,6 @@ class ChequeProcessor:
                 "confidence": 0.0,
                 "extracted_fields": []
             }
-    
-    @staticmethod
-    def _classify_by_filename(filename: str) -> Tuple[str, float]:
-        """
-        Classify cheque type based on filename patterns.
-        Returns a tuple of (cheque_type, confidence)
-        """
-        # Convert filename to lowercase for case-insensitive matching
-        filename_lower = filename.lower()
-        
-        # Strip extensions and any parenthetical parts
-        base_filename = re.sub(r'\s*\(\d+\).*$', '', filename_lower)
-        base_filename = os.path.splitext(base_filename)[0]
-        
-        # Define pattern matchers with confidence levels
-        patterns = [
-            (r'^personal\d+', 'personal_cheque', 0.95),
-            (r'^cashier\d+', 'cashier_cheque', 0.95),
-            (r'^bank\d+', 'bank_cheque', 0.9),
-            (r'^traveler\d+', 'traveler_cheque', 0.9),
-            (r'^corporate\d+', 'corporate_cheque', 0.9),
-            (r'^foreign\d+', 'foreign_cheque', 0.9),
-        ]
-        
-        # Try to match against patterns
-        for pattern, cheque_type, confidence in patterns:
-            if re.match(pattern, base_filename):
-                return cheque_type, confidence
-        
-        # Additional checks for specific keywords
-        if "personal" in base_filename:
-            return "personal_cheque", 0.8
-        elif "cashier" in base_filename:
-            return "cashier_cheque", 0.8
-        elif "bank" in base_filename:
-            return "bank_cheque", 0.8
-        elif "traveler" in base_filename or "travel" in base_filename:
-            return "traveler_cheque", 0.8
-        elif "corporate" in base_filename:
-            return "corporate_cheque", 0.8
-        elif "foreign" in base_filename or "international" in base_filename:
-            return "foreign_cheque", 0.8
-            
-        # Default to personal cheque if no pattern matched
-        return "personal_cheque", 0.5
     
     @staticmethod
     def _extract_json_from_text(text: str) -> str:
@@ -397,8 +314,6 @@ class ChequeProcessor:
                     results.append({
                         "error": str(e),
                         "file_path": file_info['path'],
-                        "document_type": "unknown",
-                        "confidence": 0.0,
                         "extracted_fields": []
                     })
         
@@ -508,10 +423,6 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                     # Process batch results
                     for result in batch_results:
                         file_path = result.get('file_path', '')
-                        
-                        # Extract document type and confidence
-                        doc_type = result.get("document_type", "unknown")
-                        confidence = result.get("confidence", 0.0)
                         
                         # Update folder results with extracted fields
                         for field in result.get("extracted_fields", []):
@@ -848,4 +759,4 @@ async def upload_files(
 
 if __name__ == "__main__":
     # Start the FastAPI server
-    uvicorn.run("cheque_extractor:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8080, reload=True)
