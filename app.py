@@ -117,21 +117,127 @@ class ChequeProcessor:
     """Helper class for cheque processing operations using Vertex AI's multimodal capabilities"""
                   
     @staticmethod
+    def extract_signature_coordinates(file_data: bytes, file_type: str) -> Dict[str, Any]:
+        """
+        Extract signature coordinates using Vertex AI's multimodal capabilities
+        """
+        try:
+            # Initialize Vertex AI model
+            model = GenerativeModel("gemini-1.5-flash-002", safety_settings=safety_settings)
+            
+            # Create a Vertex AI Part from the file data
+            file_part = Part.from_data(data=file_data, mime_type=file_type)
+            
+            # Signature extraction prompt
+            signature_prompt = """
+            You are a forensic document expert specializing in signature detection.
+            
+            CRITICAL TASK: Locate the EXACT position of the signature on this Indian bank cheque with maximum precision.
+            
+            # SIGNATURE EXTRACTION INSTRUCTIONS:
+            
+            1. THOROUGHLY EXAMINE the entire cheque image
+            2. IDENTIFY the signature area (typically bottom-right quadrant)
+            3. LOCATE any accompanying text like "Authorised Signatories"
+            4. DETERMINE precise normalized coordinates (0.0-1.0 scale)
+            5. ADD GENEROUS PADDING (at least 30%) around the signature
+            6. INCLUDE all designation text below the signature
+            7. If multiple signatures, CAPTURE ALL OF THEM if possible
+            
+            # THE MOST IMPORTANT RULE:
+            If there is ANY doubt about the signature boundaries, ALWAYS BE MORE GENEROUS and include more area rather than less.
+            
+            Return ONLY this JSON object with NO additional text:
+            {
+                "exists": true,
+                "coordinates": {
+                    "x1": 0.65,  /* Left coordinate (0-1) with GENEROUS margin */
+                    "y1": 0.55,  /* Top coordinate (0-1) with GENEROUS margin */
+                    "x2": 0.98,  /* Right coordinate (0-1) with GENEROUS margin */
+                    "y2": 0.85   /* Bottom coordinate (0-1) with GENEROUS margin */
+                },
+                "description": "Detailed description of signature and its location",
+                "confidence": 0.95
+            }
+            """
+            
+            # Generate signature coordinates
+            signature_response = model.generate_content([
+                signature_prompt,
+                file_part
+            ])
+            
+            # Extract JSON from response
+            signature_json_str = ChequeProcessor._extract_json_from_text(signature_response.text.strip())
+            
+            try:
+                signature_result = json.loads(signature_json_str)
+                return signature_result
+            except json.JSONDecodeError:
+                logger.error(f"JSON parsing error in signature extraction: {signature_json_str[:500]}...")
+                return {
+                    "exists": False,
+                    "coordinates": None,
+                    "description": "Failed to extract signature coordinates",
+                    "confidence": 0.0
+                }
+        
+        except Exception as e:
+            logger.error(f"Error during signature coordinate extraction: {str(e)}")
+            return {
+                "exists": False,
+                "coordinates": None,
+                "description": f"Error: {str(e)}",
+                "confidence": 0.0
+            }
+
+    @staticmethod
+    def _extract_json_from_text(text: str) -> str:
+        """
+        Extract valid JSON from potentially messy text that might contain
+        markdown code blocks, explanations, etc.
+        """
+        # Step 1: Remove markdown code blocks if present
+        if "```json" in text:
+            # Extract content between ```json and ``` markers
+            import re
+            json_pattern = r'```json\s*([\s\S]*?)\s*```'
+            matches = re.findall(json_pattern, text)
+            if matches:
+                return matches[0].strip()
+        
+        # Step 2: If no markdown blocks, try to find the first { and last }
+        if '{' in text and '}' in text:
+            start_idx = text.find('{')
+            end_idx = text.rfind('}') + 1
+            if start_idx < end_idx:
+                return text[start_idx:end_idx].strip()
+        
+        # Step 3: If all else fails, return the input text after removing common non-JSON elements
+        clean_text = re.sub(r'^.*?(?=\{)', '', text, flags=re.DOTALL)  # Remove everything before first {
+        clean_text = re.sub(r'(?<=\}).*$', '', clean_text, flags=re.DOTALL)  # Remove everything after last }
+        
+        return clean_text.strip()
+
+    @staticmethod
     def process_multimodal_document(file_data: bytes, file_type: str, file_path: str) -> Dict[str, Any]:
         """Process a cheque document using Vertex AI's multimodal capabilities."""
         try:
             # Initialize Vertex AI model
             model = GenerativeModel("gemini-1.5-flash-002", safety_settings=safety_settings)
             
-            result = {}
+            result = {
+                "text": "",
+                "extracted_fields": [],
+                "pages": []
+            }
             
-            # Create a Vertex AI Part from the file data
-            file_part = Part.from_data(data=file_data, mime_type=file_type)
-            
-            # For images, process directly
+            # Process only image files
             if file_type.lower() in ["image/jpeg", "image/jpg", "image/png", "image/tiff"]:
+                # Create a Vertex AI Part from the file data
+                file_part = Part.from_data(data=file_data, mime_type=file_type)
                 
-                # Now extract text and fields based on the document type
+                # Define fields and their descriptions
                 doc_fields = [field['name'] for field in FIELDS]
                 fields_str = ", ".join(doc_fields)
 
@@ -226,14 +332,35 @@ class ChequeProcessor:
                     "extracted_fields": extraction_result.get("extracted_fields", []),
                     "pages": [{"page_num": 1, "text": extraction_result.get("full_text", "")}]
                 }
-                             
+                
+                # Extract signature coordinates
+                signature_result = ChequeProcessor.extract_signature_coordinates(file_data, file_type)
+                
+                # Add signature coordinates to the result
+                result['signature_coordinates'] = signature_result
+                
+                # If signature exists, add it to extracted fields
+                if signature_result.get('exists', False):
+                    result['extracted_fields'].append({
+                        "field_name": "signature_coordinates",
+                        "value": json.dumps(signature_result['coordinates']) if signature_result['coordinates'] else "N/A",
+                        "confidence": signature_result.get('confidence', 0.0),
+                        "reason": signature_result.get('description', '')
+                    })
+                
             else:
                 logger.warning(f"Unsupported file type for Vertex AI processing: {file_type}")
                 result = {
                     "error": f"Unsupported file type: {file_type}",
                     "text": "",
                     "pages": [],
-                    "extracted_fields": []
+                    "extracted_fields": [],
+                    "signature_coordinates": {
+                        "exists": False,
+                        "coordinates": None,
+                        "description": "Unsupported file type",
+                        "confidence": 0.0
+                    }
                 }
                 
             return result
@@ -247,38 +374,15 @@ class ChequeProcessor:
                 "pages": [],
                 "document_type": "unknown",
                 "confidence": 0.0,
-                "extracted_fields": []
+                "extracted_fields": [],
+                "signature_coordinates": {
+                    "exists": False,
+                    "coordinates": None,
+                    "description": str(e),
+                    "confidence": 0.0
+                }
             }
-    
-    @staticmethod
-    def _extract_json_from_text(text: str) -> str:
-        """
-        Extract valid JSON from potentially messy text that might contain
-        markdown code blocks, explanations, etc.
-        """
-        # Step 1: Remove markdown code blocks if present
-        if "```json" in text:
-            # Extract content between ```json and ``` markers
-            import re
-            json_pattern = r'```json\s*([\s\S]*?)\s*```'
-            matches = re.findall(json_pattern, text)
-            if matches:
-                return matches[0].strip()
-        
-        # Step 2: If no markdown blocks, try to find the first { and last }
-        if '{' in text and '}' in text:
-            start_idx = text.find('{')
-            end_idx = text.rfind('}') + 1
-            if start_idx < end_idx:
-                return text[start_idx:end_idx].strip()
-        
-        # Step 3: If all else fails, return the input text after removing common non-JSON elements
-        clean_text = re.sub(r'^.*?(?=\{)', '', text, flags=re.DOTALL)  # Remove everything before first {
-        clean_text = re.sub(r'(?<=\}).*$', '', clean_text, flags=re.DOTALL)  # Remove everything after last }
-        
-        return clean_text.strip()
 
-    # ============ NEW BATCH PROCESSING METHOD ============
     @staticmethod
     def process_document_batch(file_batch):
         """
@@ -318,64 +422,77 @@ class ChequeProcessor:
                     })
         
         return results
-
-# ============ OPTIMIZED ZIP FILE PROCESSING FUNCTION ============
+    
 def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id: str):
-    """Process multiple zip files and generate Excel report using Gemini's multimodal capabilities with parallel processing."""
-
+    """
+    Process multiple zip files and generate Excel report using Gemini's multimodal capabilities with parallel processing.
+    
+    Args:
+        file_contents (List[bytes]): List of zip file contents
+        file_names (List[str]): List of corresponding zip file names
+        job_id (str): Unique identifier for the processing job
+    
+    Returns:
+        str: Path to the generated Excel output file
+    """
+    # Initialize logging and tracking variables
     logger.info(f"Starting optimized process_zip_files for job {job_id}")
     logger.info(f"Number of files: {len(file_contents)}")
     logger.info(f"File names: {file_names}")
 
+    # Job start time and file tracking
+    job_start_time = time.time()
+    total_files = 0
+    processed_files = 0
+
     try:
-        # Create a temp directory for this job
+        # Create temporary directories for processing
         temp_dir = tempfile.mkdtemp(prefix=f"job_{job_id}_")
         output_dir = os.path.join(temp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
         
         # Dictionary to store results for each folder
         folder_results = {}
-        total_files = 0
-        processed_files = 0
         
-        # For each zip file
+        # Process each uploaded zip file
         for zip_index, (zip_content, zip_name) in enumerate(zip(file_contents, file_names)):
-            # Extract the zip file to temp directory
-            zip_dir = os.path.join(temp_dir, os.path.splitext(zip_name)[0])
+            # Generate unique directory for this zip file
+            zip_dir = os.path.join(temp_dir, f"zip_{zip_index}_{os.path.splitext(zip_name)[0]}")
             os.makedirs(zip_dir, exist_ok=True)
             
+            # Extract zip contents
             with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
                 zf.extractall(zip_dir)
             
-            # Structure to organize files by folder for batch processing
+            # Prepare file collection for batch processing
             folder_files = {}
             
-            # First pass: gather files by folder
+            # Traverse directory to find processable files
             for root, dirs, files in os.walk(zip_dir):
-                # Skip the root directory
+                # Skip root zip directory
                 if root == zip_dir:
                     continue
                 
-                # Get folder name (relative to zip)
+                # Get relative path for folder naming
                 rel_path = os.path.relpath(root, zip_dir)
-                folder_name = rel_path
+                folder_name = rel_path if rel_path != '.' else zip_name
                 
-                # Skip if there are no files
+                # Skip empty directories
                 if not files:
                     continue
                 
-                # Initialize folder results if not already present
+                # Initialize folder results and files lists
                 if folder_name not in folder_results:
                     folder_results[folder_name] = []
                 
-                # Initialize folder files
                 if folder_name not in folder_files:
                     folder_files[folder_name] = []
                 
-                # Add files to the folder's file list
+                # Process files in the directory
                 for file in files:
+                    # Skip hidden or temporary files
                     if file.startswith('.') or file.startswith('~'):
-                        continue  # Skip hidden files
+                        continue
                     
                     file_path = os.path.join(root, file)
                     total_files += 1
@@ -383,19 +500,23 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                     # Get file extension
                     _, ext = os.path.splitext(file)
                     
-                    # Only include supported file types
-                    if ext.lower() not in ['.pdf', '.jpg', '.jpeg', '.png', '.tiff', '.tif']:
-                        continue
-                    
-                    # Determine file type
-                    file_type = {
+                    # Support only specific image and document types
+                    supported_extensions = {
                         '.pdf': 'application/pdf',
                         '.jpg': 'image/jpeg',
                         '.jpeg': 'image/jpeg',
                         '.png': 'image/png',
                         '.tiff': 'image/tiff',
                         '.tif': 'image/tiff'
-                    }.get(ext.lower(), 'application/octet-stream')
+                    }
+                    
+                    # Check if file type is supported
+                    if ext.lower() not in supported_extensions:
+                        logger.warning(f"Unsupported file type: {file_path}")
+                        continue
+                    
+                    # Determine file MIME type
+                    file_type = supported_extensions[ext.lower()]
                     
                     # Read file data
                     with open(file_path, 'rb') as f:
@@ -408,89 +529,74 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         'type': file_type
                     })
             
-            # Second pass: Process files in batches by folder
+            # Process files in batches for each folder
             for folder_name, files_list in folder_files.items():
                 logger.info(f"Processing folder {folder_name} with {len(files_list)} files")
                 
-                # Process in batches
+                # Process files in batches
                 for i in range(0, len(files_list), BATCH_SIZE):
                     batch = files_list[i:i+BATCH_SIZE]
                     logger.info(f"Processing batch {i//BATCH_SIZE + 1} with {len(batch)} files")
                     
-                    # Process the batch
+                    # Process batch in parallel
                     batch_results = ChequeProcessor.process_document_batch(batch)
                     
-                    # Process batch results
+                    # Process and collect batch results
                     for result in batch_results:
                         file_path = result.get('file_path', '')
                         
-                        # Update folder results with extracted fields
+                        # Extract and store fields
                         for field in result.get("extracted_fields", []):
-                            field_info = {
+                            folder_results[folder_name].append({
+                                "filepath": file_path,
                                 "field_name": field.get("field_name", ""),
                                 "value": field.get("value", ""),
                                 "confidence": field.get("confidence", 0.0),
                                 "reason": field.get("reason", "")
-                            }
-                            
-                            # Add to folder results
-                            folder_results[folder_name].append({
-                                "filepath": file_path,
-                                "field_name": field_info["field_name"],
-                                "value": field_info["value"],
-                                "confidence": field_info["confidence"],
-                                "reason": field_info["reason"]
                             })
                         
                         processed_files += 1
                         
-                        # Update progress periodically
+                        # Periodic progress update
                         if processed_files % 10 == 0:
-                            elapsed_time = time.time() - processed_jobs[job_id]["start_time"]
-                            if processed_files > 0 and total_files > 0:
+                            current_time = time.time()
+                            elapsed_time = current_time - job_start_time
+                            
+                            # Calculate processing rate and estimated time remaining
+                            if processed_files > 0:
                                 files_per_second = processed_files / elapsed_time
                                 remaining_files = total_files - processed_files
-                                estimated_time_remaining = remaining_files / files_per_second if files_per_second > 0 else 0
+                                estimated_time_remaining = (remaining_files / files_per_second) if files_per_second > 0 else 0
                                 
-                                # Format time remaining into hours, minutes, seconds
+                                # Format time remaining
                                 hours, remainder = divmod(estimated_time_remaining, 3600)
                                 minutes, seconds = divmod(remainder, 60)
                                 time_format = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
                                 
-                                logger.info(f"Progress: {processed_files}/{total_files} files processed "
-                                        f"({processed_files/total_files*100:.1f}%). "
-                                        f"Processing rate: {files_per_second:.2f} files/sec. "
-                                        f"Estimated time remaining: {time_format}")
-                                
-                                # Update job status with progress information
-                                processed_jobs[job_id].update({
-                                    "processed_files": processed_files,
-                                    "processing_rate": files_per_second,
-                                    "estimated_time_remaining": estimated_time_remaining
-                                })
-
-        # Generate Excel report
+                                # Log progress
+                                logger.info(
+                                    f"Progress: {processed_files}/{total_files} files processed "
+                                    f"({processed_files/total_files*100:.1f}%). "
+                                    f"Processing rate: {files_per_second:.2f} files/sec. "
+                                    f"Estimated time remaining: {time_format}"
+                                )
+        
+        # Generate comprehensive Excel report
         excel_path = os.path.join(output_dir, f"cheque_extraction_results_{job_id}.xlsx")
         with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-            # Process each folder's results
+            # Process results for each folder
             for folder_name, results in folder_results.items():
                 if not results:
                     continue
-                    
-                # Create DataFrame
-                df = pd.DataFrame()
                 
-                # Group by filepath
+                # Prepare data for DataFrame
                 filepath_groups = {}
-                
                 for item in results:
                     filepath = item["filepath"]
                     if filepath not in filepath_groups:
-                        filepath_groups[filepath] = {
-                            "filepath": filepath,
-                        }
+                        filepath_groups[filepath] = {"filepath": filepath}
                     
-                    # Add field name, value, confidence
+                    # Add field details
                     if "field_name" in item:
                         field_name = item["field_name"]
                         filepath_groups[filepath][field_name] = item["value"]
@@ -499,13 +605,13 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         if item.get("reason"):
                             filepath_groups[filepath][f"{field_name}_reason"] = item["reason"]
                 
-                # Convert to DataFrame
+                # Create DataFrame
                 if filepath_groups:
                     df = pd.DataFrame(list(filepath_groups.values()))
                     
-                    # Reorder columns to put field and confidence side by side
+                    # Define column order
                     cols = ["filepath"]
-                    for field in FIELDS:
+                    for field in FIELDS + [{"name": "signature_coordinates"}]:
                         field_name = field["name"]
                         if field_name in df.columns:
                             cols.append(field_name)
@@ -513,47 +619,53 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                             if f"{field_name}_reason" in df.columns:
                                 cols.append(f"{field_name}_reason")
                     
-                    # Use only columns that exist in the DataFrame
+                    # Select existing columns
                     cols = [col for col in cols if col in df.columns]
-                    if cols:  # Only reindex if columns exist
+                    if cols:
                         df = df[cols]
-                
-                # Create a sanitized sheet name
-                sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
-                if len(sheet_name) > 31:
-                    sheet_name = sheet_name[:28] + '...'
-                
-                # Write to Excel
-                if not df.empty:
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    
+                    # Sanitize sheet name
+                    sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
+                    sheet_name = (sheet_name[:28] + '...') if len(sheet_name) > 31 else sheet_name
+                    
+                    # Write to Excel
+                    if not df.empty:
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
         
-        # Update job status in-memory
+        # Update job status
+        job_end_time = time.time()
         processed_jobs[job_id] = {
             "status": "completed",
-            "start_time": time.time(),
-            "end_time": time.time(),
+            "start_time": job_start_time,
+            "end_time": job_end_time,
             "total_files": total_files,
             "processed_files": processed_files,
-            "output_file_path": excel_path
+            "output_file_path": excel_path,
+            "processing_time": job_end_time - job_start_time
         }
         
         logger.info(f"Job {job_id} completed. Output file: {excel_path}")
         return excel_path
-        
+    
     except Exception as e:
+        # Comprehensive error handling
         logger.error(f"Error processing zip files: {str(e)}")
         logger.error(traceback.format_exc())
         
         # Update job status to failed
         processed_jobs[job_id] = {
             "status": "failed",
-            "start_time": time.time(),
+            "start_time": job_start_time,
             "end_time": time.time(),
-            "total_files": total_files if 'total_files' in locals() else 0,
-            "processed_files": processed_files if 'processed_files' in locals() else 0,
-            "error_message": str(e)
+            "total_files": total_files,
+            "processed_files": processed_files,
+            "error_message": str(e),
+            "error_traceback": traceback.format_exc()
         }
-
+        
+        # Raise the exception to be handled by the caller
+        raise
+    
 @app.get("/download/{job_id}")
 async def download_results(job_id: str):
     """Download the results of a completed job."""
