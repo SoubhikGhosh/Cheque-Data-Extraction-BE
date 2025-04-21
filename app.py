@@ -134,6 +134,39 @@ class ChequeProcessor:
             
             CRITICAL TASK: Locate the EXACT position of the signature on this Indian bank cheque with maximum precision.
             
+            # BANK IDENTIFICATION GUIDE:
+            
+            1. HDFC BANK:
+            - Logo appears in top-left corner
+            - Look for "HDFC BANK" text and IFSC code
+            - Signature is in bottom-right corner with "Authorised Signatories" text
+            - May include "For [COMPANY NAME]" above signature
+            - Often has wavy pattern on left side of cheque
+            
+            2. ICICI BANK:
+            - Logo appears in top-left with "ICICI Bank" text
+            - May have "Privilege" or "Imperia" premium banking logo
+            - Signature appears bottom-right with "AUTHORISED SIGNATORIES" text
+            - Often has "A/C PAYEE" stamp diagonally in center
+            
+            3. PUNJAB NATIONAL BANK:
+            - Has "PNB" or "Punjab National Bank" logo
+            - Signature appears bottom-right with "Authorised Signatory(ies)" text
+            - May include "Proprietor" designation
+            
+            4. INDIAN OVERSEAS BANK:
+            - Has "Indian Overseas Bank" text/logo
+            - Signature appears bottom-right with "PARTNER" text
+            - Often includes branch details like "KOLKATA-700007"
+            
+            5. ANY OTHER INDIAN BANK:
+            - Signature is almost always in bottom-right quadrant
+            - Look for signature line and accompanying text like:
+                * "Authorised Signatory"
+                * "For [COMPANY]"
+                * "Please sign above"
+                * "Proprietor" / "Partner" / "Director"
+            
             # SIGNATURE EXTRACTION INSTRUCTIONS:
             
             1. THOROUGHLY EXAMINE the entire cheque image
@@ -430,14 +463,13 @@ class ChequeProcessor:
         
         return results
     
-def crop_image_with_coordinates(image_path, coordinates, output_size=(300, 300)):
+def crop_image_with_coordinates(image_path, coordinates):
     """
-    Crop an image based on normalized coordinates.
+    Crop an image based on normalized coordinates with extra padding.
     
     Args:
         image_path (str): Path to the original image
         coordinates (dict): Normalized coordinates (x1, y1, x2, y2)
-        output_size (tuple): Desired output size for the cropped image
     
     Returns:
         bytes: Cropped image as bytes
@@ -448,26 +480,36 @@ def crop_image_with_coordinates(image_path, coordinates, output_size=(300, 300))
             # Get image dimensions
             width, height = img.size
             
-            # Convert normalized coordinates to pixel coordinates
-            x1 = int(coordinates['x1'] * width)
-            y1 = int(coordinates['y1'] * height)
-            x2 = int(coordinates['x2'] * width)
-            y2 = int(coordinates['y2'] * height)
+            # Extract coordinates with generous padding
+            x1 = int(coordinates.get("x1", 0.65) * width)
+            y1 = int(coordinates.get("y1", 0.60) * height)
+            x2 = int(coordinates.get("x2", 0.98) * width)
+            y2 = int(coordinates.get("y2", 0.90) * height)
             
-            # Crop the image
+            # Add very generous padding (30%) to ensure we don't miss parts of the signature
+            # For Indian cheques where the signature area can include designations and "Please sign above" text
+            padding_x = int((x2 - x1) * 0.30)
+            padding_y = int((y2 - y1) * 0.30)
+            
+            # Apply padding while ensuring we stay within image bounds
+            x1 = max(0, x1 - padding_x)
+            y1 = max(0, y1 - padding_y)
+            x2 = min(width, x2 + padding_x)
+            y2 = min(height, y2 + padding_y)
+            
+            logger.info(f"Final signature crop coordinates: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+            
+            # Crop image without resizing
             cropped_img = img.crop((x1, y1, x2, y2))
-            
-            # Resize while maintaining aspect ratio
-            cropped_img.thumbnail(output_size, Image.LANCZOS)
             
             # Save to bytes
             img_byte_arr = io.BytesIO()
             cropped_img.save(img_byte_arr, format='PNG')
             return img_byte_arr.getvalue()
     except Exception as e:
-        print(f"Error cropping image: {e}")
+        logger.error(f"Error cropping image: {e}")
         return None
-    
+        
 def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id: str):
     """
     Process multiple zip files and generate Excel report with signature image cropping.
