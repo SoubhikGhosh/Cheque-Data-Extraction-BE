@@ -287,6 +287,13 @@ class ChequeProcessor:
                 Format your response as a JSON with two parts:
                 1. "full_text": The complete text from the cheque
                 2. "extracted_fields": An array of objects with field_name, value, and confidence
+
+                Additional checks for languages other than English:
+                1. Field values can be in different languages other than english
+                2. Field values will pre-dominantly include English and regional Indian languages like Hindi, Kannada, Telugu, Tamil, Punjabi etc.
+                3. Fields like payee_name, amount_words and issuer_name have an additional chance of being in a different language than english
+                4. If the text is unclear, make a reasonable approximation in the same regional language
+                5. Carefully distinguish between similar looking alphabet, like telugu and kannada, bengali and assamese, etc.
                 
                 IMPORTANT: Your response must be a valid JSON object and NOTHING ELSE. No explanations, no markdown code blocks.
                 """
