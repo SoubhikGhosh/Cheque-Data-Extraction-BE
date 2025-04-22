@@ -765,12 +765,6 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         workbook = writer.book
                         worksheet = writer.sheets[sheet_name]
                         
-                        # Prepare cell format for images
-                        cell_format = workbook.add_format({
-                            'align': 'center', 
-                            'valign': 'vcenter'
-                        })
-                        
                         # Add a new column for signatures
                         signature_col = len(cols)
                         
@@ -778,7 +772,7 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         worksheet.set_column(signature_col, signature_col, 20)
                         
                         # Add column header for signatures
-                        worksheet.write(0, signature_col, "Signature", cell_format)
+                        worksheet.write(0, signature_col, "Signature")
                         
                         # Add signature images inside cells
                         for idx, row in df.iterrows():
@@ -797,8 +791,8 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                                         {
                                             'x_scale': 0.5, 
                                             'y_scale': 0.5,
-                                            'object_position': 1,  # Center the image
-                                            'cell_format': cell_format
+                                            'positioning': 2  # Move and size with cell
+
                                         }
                                     )
                                 except Exception as e:
