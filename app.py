@@ -705,7 +705,6 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
         
         # Create Excel writer with xlsxwriter engine to support images
         with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-            # Process results for each folder
             for folder_name, results in folder_results.items():
                 if not results:
                     continue
@@ -756,7 +755,7 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                     sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
                     sheet_name = (sheet_name[:28] + '...') if len(sheet_name) > 31 else sheet_name
                     
-                    # Write to Excel with image support
+                    # Write to Excel
                     if not df.empty:
                         # Write DataFrame to Excel
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -765,20 +764,18 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         workbook = writer.book
                         worksheet = writer.sheets[sheet_name]
                         
+                        # Adjust column widths
+                        worksheet.set_column('A:Z', 20)  # Wider columns to accommodate images
+                        
                         # Prepare cell format for images
                         cell_format = workbook.add_format({
                             'align': 'center', 
                             'valign': 'vcenter'
                         })
                         
-                        # Add a new column for signatures
-                        signature_col = len(cols)
-                        
-                        # Set column width to accommodate images
-                        worksheet.set_column(signature_col, signature_col, 20)
-                        
-                        # Add column header for signatures
-                        worksheet.write(0, signature_col, "Signature", cell_format)
+                        # Set consistent row height
+                        row_height = 100  # Adjust as needed
+                        worksheet.set_default_row(row_height)
                         
                         # Add signature images inside cells
                         for idx, row in df.iterrows():
@@ -789,16 +786,33 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                                 try:
                                     img_path = signature_images[filepath]
                                     
-                                    # Insert image inside a cell
+                                    # Open the image to get its dimensions
+                                    with Image.open(img_path) as img:
+                                        img_width, img_height = img.size
+                                    
+                                    # Calculate scaling to fit within cell
+                                    max_width = 150  # Max width in pixels
+                                    max_height = row_height - 10  # Leave some padding
+                                    
+                                    # Calculate scaling factor
+                                    width_scale = max_width / img_width
+                                    height_scale = max_height / img_height
+                                    scale = min(width_scale, height_scale)
+                                    
+                                    # Signature column is the last column
+                                    signature_col = len(cols)
+                                    
+                                    # Insert image
                                     worksheet.insert_image(
                                         idx + 1,  # Excel rows are 1-indexed, and first row is header
                                         signature_col, 
                                         img_path,
                                         {
-                                            'x_scale': 0.5, 
-                                            'y_scale': 0.5,
-                                            'object_position': 1,  # Center the image
-                                            'cell_format': cell_format
+                                            'x_offset': 10,  # Small horizontal offset
+                                            'y_offset': 5,   # Small vertical offset
+                                            'x_scale': scale,  # Dynamic scaling
+                                            'y_scale': scale,
+                                            'positioning': 2  # Move and size with cell
                                         }
                                     )
                                 except Exception as e:
