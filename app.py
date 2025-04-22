@@ -765,10 +765,22 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                         workbook = writer.book
                         worksheet = writer.sheets[sheet_name]
                         
-                        # Add image column for signatures
-                        signature_img_col = len(cols)  # Add new column after existing columns
+                        # Prepare cell format for images
+                        cell_format = workbook.add_format({
+                            'align': 'center', 
+                            'valign': 'vcenter'
+                        })
                         
-                        # Add signature images
+                        # Add a new column for signatures
+                        signature_col = len(cols)
+                        
+                        # Set column width to accommodate images
+                        worksheet.set_column(signature_col, signature_col, 20)
+                        
+                        # Add column header for signatures
+                        worksheet.write(0, signature_col, "Signature", cell_format)
+                        
+                        # Add signature images inside cells
                         for idx, row in df.iterrows():
                             filepath = row['filepath']
                             
@@ -777,12 +789,17 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
                                 try:
                                     img_path = signature_images[filepath]
                                     
-                                    # Insert image into worksheet
+                                    # Insert image inside a cell
                                     worksheet.insert_image(
                                         idx + 1,  # Excel rows are 1-indexed, and first row is header
-                                        signature_img_col, 
+                                        signature_col, 
                                         img_path,
-                                        {'x_scale': 0.5, 'y_scale': 0.5}  # Adjust scaling as needed
+                                        {
+                                            'x_scale': 0.5, 
+                                            'y_scale': 0.5,
+                                            'object_position': 1,  # Center the image
+                                            'cell_format': cell_format
+                                        }
                                     )
                                 except Exception as e:
                                     logger.error(f"Error inserting signature image for {filepath}: {e}")
@@ -821,7 +838,7 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
         
         # Raise the exception to be handled by the caller
         raise
-    
+       
 @app.get("/download/{job_id}")
 async def download_results(job_id: str):
     """Download the results of a completed job."""
