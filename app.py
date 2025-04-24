@@ -50,7 +50,7 @@ configure_enhanced_logging()
 app = FastAPI(
     title="Cheque Data Extraction API",
     description="API for processing zip files containing cheque images using Vertex AI",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # Configure CORS
