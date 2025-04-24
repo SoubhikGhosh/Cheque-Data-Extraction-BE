@@ -123,7 +123,7 @@ class ChequeProcessor:
         """
         try:
             # Initialize Vertex AI model
-            model = GenerativeModel("gemini-1.5-flash-002", safety_settings=safety_settings)
+            model = GenerativeModel("gemini-1.5-pro", safety_settings=safety_settings)
             
             # Create a Vertex AI Part from the file data
             file_part = Part.from_data(data=file_data, mime_type=file_type)
@@ -257,7 +257,7 @@ class ChequeProcessor:
         """Process a cheque document using Vertex AI's multimodal capabilities."""
         try:
             # Initialize Vertex AI model
-            model = GenerativeModel("gemini-1.5-flash-002", safety_settings=safety_settings)
+            model = GenerativeModel("gemini-1.5-pro", safety_settings=safety_settings)
             
             result = {
                 "text": "",
