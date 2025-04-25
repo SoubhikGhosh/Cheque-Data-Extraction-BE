@@ -444,17 +444,16 @@ class ChequeProcessor:
                         *   `"language"`: (Optional, but preferred for `payee_name`, `amount_words`, `issuer_name`) The detected language of the extracted value (string, e.g., "English", "Hindi", "Tamil"). Null if not applicable or detection failed.
 
 
-                **Example `extracted_fields` Object:**
-                ```json
-                {
+                **Example extracted_fields object will contain all these fields with example values like:
                     "field_name": "amount_numeric",
                     "value": "1500.00",
                     "confidence": 0.98,
                     "text_segment": "1500/-",
                     "reason": null,
                     "language": "English"
-                }```
-                Ensure your entire output is enclosed in a single JSON object."""  
+                    
+                IMPORTANT: Your response must be a valid JSON object and NOTHING ELSE. No explanations, no markdown code blocks.
+                """  
 
                 extraction_response = model.generate_content([
                     extraction_prompt,
