@@ -339,12 +339,19 @@ class ChequeProcessor:
                         "**Challenge:** Might be missing, illegible if handwritten, or just a company stamp."
                     ),
                     "micr_code": (
-                        "**Primary Task:** Extract the Magnetic Ink Character Recognition code.\n"
+                        "**Primary Task:** Extract ONLY the 9-digit Magnetic Ink Character Recognition code.\n"
                         "**Location:** Distinctive E-13B font printed along the bottom edge of the cheque.\n"
-                        "**Format:** **DIGITS ONLY (0-9)**. Exclude any special surrounding symbols (like ⑆, ⑈, ⑇).\n"
-                        "**Structure (India):** Typically 9 digits (e.g., CityCode-BankCode-BranchCode: 3-3-3).\n"
-                        "**Method:** Target the specific font and location. Apply OCR trained for E-13B. Validate digit-only content and expected length.\n"
-                        "**Challenge:** Faint/broken print, ink smudges, non-standard characters mistakenly included."
+                        "**Format:** **EXACTLY 9 DIGITS (0-9)** - no more, no less.\n"
+                        "**Critical Rule:** ALWAYS REMOVE surrounding special symbols (⑆, ⑈, ⑇) and any other non-digit characters.\n"
+                        "**Structure (India):** Exactly 9 digits in format: CityCode(3)-BankCode(3)-BranchCode(3).\n"
+                        "**Method:** \n"
+                        "   1. Target the specific MICR E-13B font at the bottom of the cheque.\n"
+                        "   2. Locate the sequence typically found between ⑈ and ⑆ symbols.\n"
+                        "   3. Extract ONLY the 9 digits - discard ALL special symbols, spaces, and any other characters.\n"
+                        "   4. Validate the result is EXACTLY 9 digits long (no more, no less).\n"
+                        "   5. If more than 9 digits are found, extract ONLY the 9 digits that match the CityCode-BankCode-BranchCode pattern.\n"
+                        "**Validation:** Apply strict format verification - final output must be EXACTLY 9 digits (0-9).\n"
+                        "**Challenge:** Faint/broken print, ink smudges, OCR mistakes with special MICR symbols."
                     ),
                     "signature_present": (
                         "**Primary Task:** Determine if a handwritten signature exists.\n"
@@ -451,7 +458,7 @@ class ChequeProcessor:
                     "text_segment": "1500/-",
                     "reason": null,
                     "language": "English"
-                    
+
                 IMPORTANT: Your response must be a valid JSON object and NOTHING ELSE. No explanations, no markdown code blocks.
                 """  
 
