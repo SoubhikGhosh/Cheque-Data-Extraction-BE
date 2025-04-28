@@ -276,96 +276,147 @@ class ChequeProcessor:
 
                 field_descriptions = {
                     "bank_name": (
-                        "**Primary Task:** Extract the official name of the bank.\n"
-                        "**Location:** Prioritize the name prominently displayed in the top-left quadrant of the cheque.\n"
-                        "**Disambiguation:** If multiple bank names appear, strictly select the one in the top-left corner.\n"
-                        "**Method:** Use visual layout cues, contextual knowledge of major Indian and international bank names/logos, and pattern recognition. Cross-reference with IFSC/MICR if needed.\n"
-                        "**Challenge:** Faded print, stylized logos."
+                        "**Objective:** Accurately extract the official name of the issuing bank.\n"
+                        "**Primary Location Strategy:** Focus EXCLUSIVELY on the most prominent bank name text, typically located in the **top-left quadrant** of the cheque. This often corresponds to the bank's primary logo/branding.\n"
+                        "**Disambiguation Rules:**\n"
+                        "  1. If multiple bank names appear (e.g., clearing bank stamps), STRICTLY prioritize the top-left issuing bank name.\n"
+                        "  2. Actively differentiate the bank name from the `payee_name` based on typical location and keywords ('PAY TO').\n"
+                        "**Extraction Method:** Utilize visual layout analysis combined with knowledge of major Indian and international bank names. Cross-reference with the first 4 characters of the `IFSC` code if available and unambiguous.\n"
+                        "**Data Cleansing:** Normalize variations (e.g., 'HDFC Bank' -> 'HDFC BANK LTD'). Validate against a comprehensive list of known Indian bank names. Treat 'HDFC BANK LTD' as a correct and valid name.\n"
+                        "**Handling Poor Quality:** Employ image enhancement techniques (contrast, binarization) specifically on the target area if scan quality is low.\n"
+                        "**Output:** The standardized, official bank name."
                     ),
                     "bank_branch": (
-                        "**Primary Task:** Identify the specific branch name or location.\n"
-                        "**Location:** Typically found directly below or adjacent to the `bank_name`.\n"
-                        "**Content:** May include branch name, city, area code, or a combination.\n"
-                        "**Method:** Look for text indicating a location or branch designation near the bank name.\n"
-                        "**Challenge:** Can be less prominent than the bank name, might be abbreviated."
+                        "**Objective:** Extract the specific branch name or location identifier.\n"
+                        "**Primary Location Strategy:** Search for text indicating a location (city, area, branch designation) directly **below or adjacent to the extracted `bank_name`**.\n"
+                        "**Content:** Expect branch names, city names, area codes, or combinations. Can span multiple lines.\n"
+                        "**Extraction Method:**\n"
+                        "  1. Look for explicit labels like 'Branch:', 'Br.', 'IFSC:' (branch info often follows IFSC).\n"
+                        "  2. Capture text immediately following the `bank_name` even without explicit labels.\n"
+                        "  3. **Crucially, combine text from multiple consecutive lines** if the branch address appears split.\n"
+                        "  4. Apply text segmentation to isolate branch info from surrounding elements (e.g., logos, address lines unrelated to branch).\n"
+                        "**Handling Partial Reads:** If only partial text is clear, use context (common Indian city/area names) to infer the most likely branch identifier.\n"
+                        "**Output:** The full branch name/location string as it appears, combined across lines if necessary."
                     ),
                     "account_number": (
-                        "**Primary Task:** Extract the unique identifier of the customer's bank account.\n"
-                        "**Location:** Variable, often near bank details, payee line, or MICR strip. Look for labels like 'A/C No.', 'Account No.', 'SB Acct', etc.\n"
-                        "**Format:** Primarily numeric, but may contain hyphens or spaces (ignore separators in final value). Can occasionally be alphanumeric in some banks.\n"
-                        "**Method:** Identify sequences of digits (typically 9-16 digits) associated with account labels. Apply rigorous character differentiation (0/O, 1/I, 5/S, 8/B).\n"
-                        "**Challenge:** OCR errors on digits, varying lengths, potential prefixes/suffixes."
+                        "**Objective:** Extract the customer's bank account number.\n"
+                        "**Location Strategy:** Search in priority order:\n"
+                        "  1. Near explicit labels: 'A/C No.', 'Account No.', 'SB Acct', 'Acct No.', etc.\n"
+                        "  2. Often located near the `payee_name` line or below bank/branch details.\n"
+                        "  3. Check the footer/MICR area, especially on non-standard formats (Drafts, Manager's Cheques).\n"
+                        "  4. Scan both horizontal and potentially vertical orientations near the edges.\n"
+                        "**Format:** Primarily numeric (typically 9-18 digits). May contain hyphens or spaces (which **must be removed** in the final output). Can occasionally be alphanumeric for specific banks/account types.\n"
+                        "**Extraction Method:** Identify digit sequences matching expected lengths associated with account labels or typical locations. Apply robust digit/character recognition (0/O, 1/I, 5/S, 8/B differentiation).\n"
+                        "**Handling Special Formats:** Recognize that formats like PAYINST DRAFT or Manager's Cheques may lack explicit 'A/C No.' labels; rely on typical location for these formats.\n"
+                        "**Output:** The extracted account number sequence (digits/alphanumerics only), with separators removed. If definitively not present, output 'Not Found'."
                     ),
                     "date": (
-                        "**Primary Task:** Extract the issue date of the cheque and standardize it.\n"
-                        "**Location:** Almost always in the top-right corner, often within designated boxes (DD MM YYYY).\n"
-                        "**Input Format:** Handle various formats (DDMMYYYY, DD/MM/YYYY, DD-MM-YY, DD.MM.YYYY, DD Mon YYYY, etc.), including handwritten variations and partial pre-fills (e.g., printed '20__').\n"
-                        "**Output Format:** **Strictly YYYY-MM-DD.**\n"
-                        "**Method:** Parse day, month, and year components. Use context (assume DD/MM for India if ambiguous) and validate as a real calendar date within a reasonable timeframe (e.g., past 6 months).\n"
-                        "**Challenge:** Illegible handwriting, ambiguous single digits, strikethroughs/corrections (extract the final date)."
+                        "**Objective:** Extract the issue date and standardize it.\n"
+                        "**Primary Location Strategy:** Target the **top-right corner**, typically within designated DD MM YYYY boxes.\n"
+                        "**Input Format Handling:** Recognize and parse various common formats: DDMMYYYY, DD/MM/YYYY, DD-MM-YY, DD.MM.YYYY, DD Mon YYYY, handwritten variations, dates printed over boxes, and partial pre-fills (e.g., printed '20__' with handwritten '24').\n"
+                        "**Extraction Method:**\n"
+                        "  1. Segment the Day (DD), Month (MM), and Year (YYYY/YY) components.\n"
+                        "  2. Apply specific OCR techniques for both printed and handwritten digits within the date area.\n"
+                        "  3. Use image processing to handle characters overlapping box lines.\n"
+                        "  4. If multiple dates are present (e.g., stamp vs handwritten), prioritize the main handwritten/typed date in the designated boxes.\n"
+                        "  5. Validate the extracted date as a plausible calendar date (e.g., day <= 31, month <= 12) within a reasonable past window (e.g., last 12 months unless context suggests older validity).\n"
+                        "**Output Format:** **Strictly YYYY-MM-DD.** Convert all valid inputs to this format."
                     ),
                     "payee_name": (
-                        "**Primary Task:** Extract the name of the recipient (person or entity).\n"
-                        "**Location:** Follows the keyword 'PAY', 'Pay To', 'Pay to the order of', usually below the bank details.\n"
-                        "**Content:** Typically handwritten, can span multiple lines, may include titles (Mr./Ms./M/s).\n"
-                        "**Method:** Focus on the text following 'PAY'. Apply advanced handwriting recognition.\n"
-                        "**Challenge:** Highly variable handwriting, legibility issues, potential for non-English names/scripts (Hindi, Tamil, etc.), overlapping text."
+                        "**Objective:** Extract the name of the recipient (person or entity).\n"
+                        "**Primary Location Strategy:** Target the text **immediately following keywords** like 'PAY', 'Pay To', 'Pay to the order of'. This line is typically below bank details and above the amount-in-words.\n"
+                        "**Content:** Usually handwritten, can span multiple lines, may include titles (Mr./Ms./M/s) or company suffixes (Pvt Ltd, Ltd.).\n"
+                        "**Extraction Method:**\n"
+                        "  1. Capture ALL text on the line(s) following the 'PAY' keyword until the `amount_words` section begins.\n"
+                        "  2. Apply advanced handwriting recognition, potentially using models trained on Indian handwriting styles.\n"
+                        "  3. **Handle Multilingual Text:** If non-English scripts (Devanagari, Tamil, etc.) are detected, attempt extraction using appropriate script-specific models or output the text as recognized.\n"
+                        "  4. **Disambiguate:** Clearly distinguish from the `issuer_name` based on location and context.\n"
+                        "  5. Apply spelling correction biased towards common Indian names and company names.\n"
+                        "**Output:** The full payee name, including titles and suffixes, as accurately as possible. Normalize variations in titles if required (e.g., M/s -> M/S)."
                     ),
                     "amount_words": (
-                        "**Primary Task:** Extract the cheque amount written out in words (legal amount).\n"
-                        "**Location:** Usually below the `payee_name`, often starting with 'Rupees' or the currency name, may span two lines, often ends with 'Only'.\n"
-                        "**Content:** Primarily handwritten text representing the numeric value.\n"
-                        "**Method:** Apply advanced handwriting recognition. Capture all relevant text, including currency units (e.g., 'Rupees', 'Dollars') and fractional units ('Paise', 'Cents') if present. Cross-validate logic with `amount_numeric`.\n"
-                        "**Challenge:** Difficult handwriting, non-English words/scripts (e.g., 'हजार', 'லட்சம்'), abbreviations, spanning multiple lines."
+                        "**Objective:** Extract the cheque amount written in words (legal amount).\n"
+                        "**Primary Location Strategy:** Target the line(s) typically starting below the `payee_name`, often beginning with 'Rupees' or the currency name.\n"
+                        "**Content:** Primarily handwritten text representing the numeric value, potentially spanning two lines, often ending with 'Only'. Can include fractional units ('Paise') and Indian numbering terms ('Lakh', 'Crore').\n"
+                        "**Extraction Method:**\n"
+                        "  1. Capture the *entire* text phrase from the start (e.g., 'Rupees') to the end (e.g., 'Only').\n"
+                        "  2. Apply advanced handwriting recognition.\n"
+                        "  3. **Handle Multilingual Text:** Recognize and correctly interpret Indian language number words (e.g., 'हजार', 'लाख', 'കോടി') and currency names ('रुपये').\n"
+                        "  4. **Validate:** Use the recognized `amount_numeric` as a strong cross-validation signal to confirm the accuracy of the extracted words.\n"
+                        "  5. Handle hyphenation and line breaks correctly if the amount spans multiple lines.\n"
+                        "**Output:** The full amount in words string."
                     ),
                     "amount_numeric": (
-                        "**Primary Task:** Extract the cheque amount written in figures.\n"
-                        "**Location:** Typically in a designated box or area on the right-middle side of the cheque, often preceded or followed by a currency symbol (₹, $, €) or code.\n"
-                        "**Format:** Numeric digits, potentially with commas as thousands separators and a period/dot as the decimal separator. May end with '/-' or '.00'.\n"
-                        "**Method:** Identify digits within the amount box. Capture the full value including decimals. Note adjacent currency symbol for `currency` field determination. Apply rigorous digit OCR. Cross-validate with `amount_words`.\n"
-                        "**Challenge:** Handwritten digits clarity (esp. 1/7, 4/9, 2/5), overlapping currency symbols, corrections."
-                    ),
-                    "currency": (
-                        "**Primary Task:** Identify the currency of the transaction.\n"
-                        "**Method:** Infer from: \n    1. Explicit currency codes (e.g., INR, USD, EUR) printed on the cheque.\n    2. Currency symbols next to `amount_numeric` (e.g., ₹, $, £, €).\n    3. Currency words in `amount_words` (e.g., 'Rupees', 'Dollars').\n    4. Default to context (e.g., assume 'INR' for identified Indian banks if no other indicators).\n"
-                        "**Output:** Standard 3-letter ISO code (e.g., INR, USD, EUR).\n"
-                        "**Challenge:** Ambiguity if multiple indicators conflict or none are present."
+                        "**Objective:** Extract the cheque amount written in figures (courtesy amount).\n"
+                        "**Primary Location Strategy:** Target the designated box or area on the **right-middle side**, often preceded/followed by a currency symbol or code.\n"
+                        "**Format:** Numeric digits, possibly with commas (thousands) and a period (decimal). Often ends with '/-' or '.00'. Currency symbols (₹, $) may be adjacent.\n"
+                        "**Extraction Method:**\n"
+                        "  1. Isolate the numeric digits within the designated amount box/area.\n"
+                        "  2. Apply robust digit recognition, handling potential confusion (1/7, 4/9, etc.) and various handwriting styles.\n"
+                        "  3. **Crucially, PREPROCESS the extracted string:** Remove any currency symbols (₹, $, INR), thousands separators (,), and common trailing characters ('/-') BEFORE outputting.\n"
+                        "  4. Retain the decimal separator (.) and subsequent digits if present (e.g., '1500.50').\n"
+                        "  5. Standardize formats: '1500' and '1500.00' should both be represented consistently if required (e.g., always include '.00' or never include if zero). Clarify desired output format.\n"
+                        "  6. **Validate:** Use the recognized `amount_words` for cross-validation.\n"
+                        "**Output:** The cleaned, purely numeric amount string (e.g., '1500.00', '1500.50', '12000')."
                     ),
                     "issuer_name": (
-                        "**Primary Task:** Extract the name of the account holder issuing the cheque.\n"
-                        "**Location:** Typically appears below the signature space or sometimes above it, usually on the bottom-right, above the MICR line.\n"
-                        "**Content:** Can be printed or handwritten; represents the individual or company name associated with the account.\n"
-                        "**Method:** Look for names (personal or company) in the designated area near the signature. Differentiate from payee name.\n"
-                        "**Challenge:** Might be missing, illegible if handwritten, or just a company stamp."
+                        "**Objective:** Extract the name of the account holder issuing the cheque (payer).\n"
+                        "**Primary Location Strategy:** Search the area **below the signature space**, usually on the bottom-right, above the MICR line. Sometimes it may appear printed elsewhere (e.g., top left under bank details for company accounts).\n"
+                        "**Content:** Can be printed text, a rubber stamp impression, or sometimes handwritten. Represents the individual or company owning the account.\n"
+                        "**Extraction Method:**\n"
+                        "  1. Look for personal or company names in the designated area(s).\n"
+                        "  2. **Handle Signatures:** If a signature overlaps the name, apply segmentation techniques to isolate the underlying text/stamp from the signature strokes.\n"
+                        "  3. **Disambiguate:** CRITICALLY differentiate from the `payee_name` based on location (Payee is after 'PAY TO', Issuer is near signature/bottom).\n"
+                        "  4. Check for rubber stamp text which often contains the issuer name/company.\n"
+                        "**Output:** The extracted issuer name. If only a signature exists and no name is found printed or stamped, output 'Not Found'."
                     ),
                     "micr_code": (
-                        "**Primary Task:** Extract ONLY the 9-digit Magnetic Ink Character Recognition code.\n"
-                        "**Location:** Distinctive E-13B font printed along the bottom edge of the cheque.\n"
-                        "**Format:** **EXACTLY 9 DIGITS (0-9)** - no more, no less.\n"
-                        "**Critical Rule:** ALWAYS REMOVE surrounding special symbols (⑆, ⑈, ⑇) and any other non-digit characters.\n"
-                        "**Structure (India):** Exactly 9 digits in format: CityCode(3)-BankCode(3)-BranchCode(3).\n"
-                        "**Method:** \n"
-                        "   1. Target the specific MICR E-13B font at the bottom of the cheque.\n"
-                        "   2. Locate the sequence typically found between ⑈ and ⑆ symbols.\n"
-                        "   3. Extract ONLY the 9 digits - discard ALL special symbols, spaces, and any other characters.\n"
-                        "   4. Validate the result is EXACTLY 9 digits long (no more, no less).\n"
-                        "   5. If more than 9 digits are found, extract ONLY the 9 digits that match the CityCode-BankCode-BranchCode pattern.\n"
-                        "**Validation:** Apply strict format verification - final output must be EXACTLY 9 digits (0-9).\n"
-                        "**Challenge:** Faint/broken print, ink smudges, OCR mistakes with special MICR symbols."
+                        "**Objective:** Extract **ONLY the 9-digit** MICR code.\n"
+                        "**Primary Location Strategy:** Target the specific **bottom edge** of the cheque containing the distinctive **E-13B font**.\n"
+                        "**Format:** **EXACTLY 9 numeric digits (0-9)**. Structure (India): City(3)-Bank(3)-Branch(3).\n"
+                        "**Extraction Method - CRITICAL STEPS:**\n"
+                        "   1. **Isolate MICR Band:** Focus image processing and OCR *only* on the bottom-most strip containing the special font.\n"
+                        "   2. **Apply E-13B Specific OCR:** Use an OCR model specifically trained or tuned for the MICR E-13B font, not generic OCR.\n"
+                        "   3. **Identify Target Sequence:** Locate the digit sequence typically flanked by MICR symbols (⑆, ⑈, ⑇). The core 9 digits are often between ⑈ and ⑆.\n"
+                        "   4. **FILTER AGGRESSIVELY:** Extract *all* characters recognized in the band.\n"
+                        "   5. **REMOVE ALL NON-DIGITS:** Delete *every* character that is NOT a digit (0-9). This includes spaces, special MICR symbols (⑆, ⑈, ⑇), and any OCR noise.\n"
+                        "   6. **VALIDATE LENGTH:** Check if the resulting string is **EXACTLY 9 digits long**.\n"
+                        "   7. **Refine (If needed):** If more than 9 digits remain after filtering (unlikely if step 5 is strict), attempt to isolate the correct 9 based on the 3-3-3 structure and potential cross-reference with bank/branch codes.\n"
+                        "**Output:** A string containing exactly 9 digits, or 'Error' / 'Not Found' if extraction fails validation."
                     ),
                     "signature_present": (
-                        "**Primary Task:** Determine if a handwritten signature exists.\n"
-                        "**Location:** Assess the designated signature area, usually bottom-right, above the `issuer_name` (if present) and MICR line.\n"
-                        "**Method:** Detect the presence of free-flowing, handwritten ink strokes consistent with a signature. Do *not* attempt to read or validate the signature itself.\n"
-                        "**Output:** **Strictly YES or NO.**\n"
-                        "**Challenge:** Faint signatures, stamps overlapping the area, distinguishing stray marks from an intended signature."
+                        "**Objective:** Determine if a handwritten signature exists in the designated area.\n"
+                        "**Primary Location Strategy:** Analyze the designated signature space, typically **bottom-right**, above the `issuer_name` (if present) and MICR line.\n"
+                        "**Method:** Detect the presence of connected, free-flowing ink strokes characteristic of a handwritten signature. **Do NOT attempt to read or validate the signature's authenticity.** Distinguish from printed text, stamps, or incidental marks.\n"
+                        "**Output:** **Strictly 'YES' or 'NO'.**"
                     ),
                     "IFSC": (
-                        "**Primary Task:** Extract the Indian Financial System Code.\n"
-                        "**Location:** Usually printed near the bank name/branch details, often explicitly labeled 'IFSC', 'IFS Code', or similar.\n"
-                        "**Format:** Alphanumeric, **strictly 11 characters** long. The first 4 are alphabetic (bank code), the 5th is always '0', and the last 6 are alphanumeric (branch code). Example: SBIN0001234.\n"
-                        "**Method:** Look for the 11-character code matching the format, often near the bank details. Validate format rigorously. Cross-reference first 4 chars with `bank_name`.\n"
-                        "**Challenge:** Small print size, potential OCR errors confusing letters/numbers (0/O, 1/I, S/5, B/8)."
+                        "**Objective:** Extract the 11-character Indian Financial System Code.\n"
+                        "**Primary Location Strategy:** Search near the `bank_name` and `bank_branch` details. Look for explicit labels: 'IFSC', 'IFS Code', 'IFSC Code'.\n"
+                        "**Format:** **Strictly 11 alphanumeric characters.**\n"
+                        "  - Format: **AAAA0XXXXXX**\n"
+                        "  - First 4 characters: Alphabetic (Bank Code)\n"
+                        "  - 5th character: MUST BE ZERO ('0')\n"
+                        "  - Last 6 characters: Alphanumeric (Branch Code)\n"
+                        "**Extraction Method:**\n"
+                        "  1. Scan the target area for strings matching the 11-character pattern.\n"
+                        "  2. Apply robust character recognition, paying attention to common confusions (0/O, 1/I, S/5, B/8).\n"
+                        "  3. **VALIDATE RIGOROUSLY:**\n"
+                        "     a. Check total length is exactly 11.\n"
+                        "     b. Verify the 5th character is '0'.\n"
+                        "     c. Verify the first 4 characters are alphabetic.\n"
+                        "  4. Cross-reference the first 4 characters with the extracted `bank_name`'s expected code if possible.\n"
+                        "  5. Handle specific layouts for non-standard cheque types (Drafts, Manager's Cheques) where IFSC might be positioned differently.\n"
+                        "**Output:** The validated 11-character IFSC code. If validation fails, output 'Error' / 'Not Found'."
+                    ),
+                    "currency": (
+                        "**Objective:** Identify the currency of the transaction.\n"
+                        "**Extraction Method (Prioritized):**\n"
+                        "  1. **Explicit Code:** Look for printed ISO 4217 codes (e.g., 'INR', 'USD', 'EUR') on the cheque body.\n"
+                        "  2. **Numeric Symbol:** Identify currency symbols adjacent to `amount_numeric` (e.g., '₹', '$', '£', '€'). Normalize '₹' and text 'INR' as Indian Rupee.\n"
+                        "  3. **Words Amount:** Extract currency words from `amount_words` (e.g., 'Rupees', 'Dollars', 'रुपये'). Handle multilingual terms.\n"
+                        "  4. **Contextual Default:** If an Indian bank (`bank_name`, `IFSC`) is identified and no other currency indicators are present, default to 'INR'.\n"
+                        "**Output:** The standard 3-letter ISO 4217 currency code (e.g., 'INR', 'USD', 'EUR')."
                     )
                 }
 
@@ -419,19 +470,33 @@ class ChequeProcessor:
                 7.  **Amount Validation:** Ensure `amount_numeric` and `amount_words` correspond logically. Note discrepancies if unavoidable. Extract numeric amount precisely, including decimals if present.
                 8.  **Signature Detection:** Assess the presence of handwritten, free-flowing ink strokes in the typical signature area (bottom right, above MICR). Output only "YES" or "NO". Do not attempt to read the signature text itself for the `signature_present` field.
 
-                **Confidence Scoring:**
+                **Confidence Scoring (Strict, Character-Informed):**
 
-                *   Assign a confidence score (0.0 to 1.0) for each extracted field based on clarity, ambiguity, potential OCR issues, handwriting legibility, and adherence to expected formats.
-                *   Use these benchmarks:
-                    *   0.95-1.00: High confidence, clear source, unambiguous.
-                    *   0.85-0.94: Very high confidence, minor potential ambiguity resolved by context.
-                    *   0.75-0.84: Good confidence, some ambiguity or minor OCR/handwriting difficulty.
-                    *   0.65-0.74: Moderate confidence, noticeable issues (e.g., slightly blurry text, difficult handwriting).
-                    *   0.50-0.64: Low confidence, significant recognition problems, extraction is uncertain.
-                    *   <0.50: Very low confidence, likely incorrect or speculative.
-                *   **Confidence Justification:** Briefly explain scores below 0.9 (e.g., 'Moderate confidence due to cursive handwriting in payee name', 'Low confidence due to faint printing of MICR').
-                *   **Handwriting Confidence Modifiers:** Adjust scores based on handwriting quality: slightly lower for complex cursive or corrections, higher for clear block printing.
-
+                *   **Core Principle:** The overall confidence score for each field MUST reflect the system's certainty about **every single character** comprising the extracted value. The field's confidence is heavily influenced by the *lowest* confidence assigned to any of its critical constituent characters or segments during the OCR/interpretation process.
+                *   **Scale:** Assign a confidence score (float, 0.00 to 1.00) for each extracted field.
+                *   **Calculation Basis:** This score integrates:
+                    *   OCR engine's internal character-level confidence values.
+                    *   Visual clarity and quality of the source text segment.
+                    *   Ambiguity checks (e.g., similar characters like 0/O, 1/I).
+                    *   Handwriting legibility (individual strokes, connections).
+                    *   Adherence to expected field format and context (e.g., a potential 'O' in a numeric field drastically lowers confidence).
+                    *   Cross-validation results (e.g., amount words vs. numeric).
+                *   **Strict Benchmarks:**
+                    *   **0.98 - 1.00 (Very High):** Near certainty. All characters are perfectly clear, unambiguous, well-formed (print or handwriting), and fully context-compliant. No plausible alternative interpretation exists for any character.
+                    *   **0.90 - 0.97 (High):** Strong confidence. All characters are clearly legible, but minor imperfections might exist (e.g., slight slant, minor ink variation) OR very low-probability alternative character interpretations exist but are strongly ruled out by context.
+                    *   **0.75 - 0.89 (Moderate):** Reasonable confidence, but with specific, identifiable uncertainties. This applies if:
+                        *   One or two characters have moderate ambiguity (e.g., a handwritten '1' that *could* be a '7', a slightly unclear 'S' vs '5').
+                        *   Minor OCR segmentation issues were overcome (e.g., slightly touching characters).
+                        *   Legible but challenging handwriting style for a character or two.
+                    *   **0.50 - 0.74 (Low):** Significant uncertainty exists. This applies if:
+                        *   Multiple characters are ambiguous or difficult to read.
+                        *   Poor print quality (faded, smudged) affects key characters.
+                        *   Highly irregular or barely legible handwriting is involved.
+                        *   Strong conflicts exist (e.g., amount words clearly mismatch numeric, but an extraction is still attempted).
+                    *   **< 0.50 (Very Low / Unreliable):** Extraction is highly speculative or impossible. The field value is likely incorrect or incomplete. Assign this if the text is largely illegible, completely missing, or fails critical format validations無法克服地 (insurmountably).
+                *   **Confidence Justification:** **Mandatory** for any score below **0.95**. Briefly explain the *primary reason* for the reduced confidence, referencing specific character ambiguities, handwriting issues, print quality, or contextual conflicts (e.g., "Moderate: Handwritten '4' resembles '9'", "Low: MICR digits '8' and '0' partially smudged", "High: Minor ambiguity between 'O'/'0' in Acc No, resolved by numeric context").
+                *   **Handwriting Impact:** Directly link handwriting quality to character confidence. Even if a word is *generally* readable, confidence drops if individual letters require significant interpretation effort. Corrections/strikethroughs automatically cap confidence unless the final value is exceptionally clear.
+                
                 **Error Handling:**
 
                 *   If a field cannot be found or reliably extracted, set its value to `null` or an empty string, assign a low confidence score (e.g., < 0.5), and provide a specific `reason` (e.g., "Field not present", "Illegible handwriting", "Smudged area", "OCR segmentation failed").
