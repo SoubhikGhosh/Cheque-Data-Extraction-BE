@@ -22,6 +22,7 @@ import uvicorn
 from collections import Counter
 import concurrent.futures
 import traceback
+from google.api_core import exceptions as google_exceptions
 
 # Configure logging
 logging.basicConfig(
@@ -118,12 +119,80 @@ processed_jobs = {}
 
 class ChequeProcessor:
     """Helper class for cheque processing operations using Vertex AI's multimodal capabilities"""
+
+    @staticmethod
+    def _call_vertex_ai_with_retry(
+        model_instance: GenerativeModel,
+        prompt_parts: List[Any],
+        max_retries: int = 5,
+        initial_delay: float = 1.0,
+        exponential_base: float = 2.0,
+        jitter: bool = True
+    ) -> Any: # Returns the model's response object
+        """
+        Calls the Vertex AI model's generate_content method with exponential backoff.
+        Args:
+            model_instance: The initialized GenerativeModel instance.
+            prompt_parts: List of parts to send to generate_content (e.g., [prompt, file_part]).
+            max_retries: Maximum number of retries.
+            initial_delay: Initial delay in seconds.
+            exponential_base: Multiplier for the delay.
+            jitter: Whether to add a random jitter to the delay.
+        Returns:
+            The response from model.generate_content().
+        Raises:
+            google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable,
+            or other relevant exceptions if retries fail or a non-retryable error occurs.
+        """
+        num_retries = 0
+        delay = initial_delay
+        # Specific Google API errors to retry on.
+        # ResourceExhausted (429), TooManyRequests (429), ServiceUnavailable (503)
+        retryable_errors = (
+            google_exceptions.ResourceExhausted,
+            google_exceptions.TooManyRequests,
+            google_exceptions.ServiceUnavailable,
+            google_exceptions.DeadlineExceeded # Can also be transient
+        )
+
+        while True:
+            try:
+                logger.debug(f"Attempting Vertex AI API call (Attempt {num_retries + 1}/{max_retries + 1})")
+                response = model_instance.generate_content(prompt_parts)
+                logger.debug(f"Vertex AI API call successful (Attempt {num_retries + 1}/{max_retries + 1})")
+                return response
+            except retryable_errors as e:
+                num_retries += 1
+                if num_retries > max_retries:
+                    logger.error(
+                        f"Max retries ({max_retries}) exceeded for Vertex AI API call. "
+                        f"Last error: {type(e).__name__} - {e}"
+                    )
+                    raise  # Re-raise the last retryable exception
+
+                actual_delay = delay
+                if jitter:
+                    actual_delay += random.uniform(0, delay * 0.25)  # Add up to 25% jitter
+
+                logger.warning(
+                    f"Vertex AI API call failed with {type(e).__name__} (Attempt {num_retries}/{max_retries}). "
+                    f"Retrying in {actual_delay:.2f} seconds..."
+                )
+                time.sleep(actual_delay)
+                delay *= exponential_base  # Increase delay
+            except Exception as e:  # Catch other non-retryable Google API errors or general errors
+                logger.error(f"Non-retryable error during Vertex AI API call: {type(e).__name__} - {e}")
+                logger.error(traceback.format_exc()) # Log full traceback for unexpected errors
+                raise # Re-raise these errors immediately
+
                   
     @staticmethod
     def extract_signature_coordinates(file_data: bytes, file_type: str) -> Dict[str, Any]:
         """
-        Extract signature coordinates using Vertex AI's multimodal capabilities
+        Extract signature coordinates using Vertex AI's multimodal capabilities with retry logic.
         """
+        # Safety settings (assuming it's defined globally as in your snippet)
+        global safety_settings
         try:
             # Initialize Vertex AI model
             model = GenerativeModel("gemini-1.5-pro", safety_settings=safety_settings)
@@ -131,7 +200,7 @@ class ChequeProcessor:
             # Create a Vertex AI Part from the file data
             file_part = Part.from_data(data=file_data, mime_type=file_type)
             
-            # Signature extraction prompt
+            # Signature extraction prompt (ensure this is correctly defined as in your original code)
             signature_prompt = """
             You are a forensic document expert specializing in signature detection.
             
@@ -197,11 +266,11 @@ class ChequeProcessor:
             }
             """
             
-            # Generate signature coordinates
-            signature_response = model.generate_content([
-                signature_prompt,
-                file_part
-            ])
+            # Generate signature coordinates using the retry mechanism
+            signature_response = ChequeProcessor._call_vertex_ai_with_retry(
+                model,
+                [signature_prompt, file_part]
+            )
             
             # Extract JSON from response
             signature_json_str = ChequeProcessor._extract_json_from_text(signature_response.text.strip())
@@ -214,16 +283,28 @@ class ChequeProcessor:
                 return {
                     "exists": False,
                     "coordinates": None,
-                    "description": "Failed to extract signature coordinates",
+                    "description": "Failed to parse signature coordinates JSON from model response",
                     "confidence": 0.0
                 }
         
-        except Exception as e:
-            logger.error(f"Error during signature coordinate extraction: {str(e)}")
+        except (google_exceptions.ResourceExhausted, 
+                google_exceptions.TooManyRequests, 
+                google_exceptions.ServiceUnavailable,
+                google_exceptions.DeadlineExceeded) as e:
+            logger.error(f"Signature coordinate extraction failed after retries due to API limits/issues: {type(e).__name__} - {e}")
             return {
                 "exists": False,
                 "coordinates": None,
-                "description": f"Error: {str(e)}",
+                "description": f"API error after retries: {str(e)}",
+                "confidence": 0.0
+            }
+        except Exception as e:
+            logger.error(f"General error during signature coordinate extraction: {type(e).__name__} - {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "exists": False,
+                "coordinates": None,
+                "description": f"Unexpected error: {str(e)}",
                 "confidence": 0.0
             }
 
@@ -232,11 +313,12 @@ class ChequeProcessor:
         """
         Extract valid JSON from potentially messy text that might contain
         markdown code blocks, explanations, etc.
+        (This method is from your original code and seems fine)
         """
         # Step 1: Remove markdown code blocks if present
         if "```json" in text:
             # Extract content between ```json and ``` markers
-            import re
+            import re # Ensure re is imported if not already globally
             json_pattern = r'```json\s*([\s\S]*?)\s*```'
             matches = re.findall(json_pattern, text)
             if matches:
@@ -250,6 +332,7 @@ class ChequeProcessor:
                 return text[start_idx:end_idx].strip()
         
         # Step 3: If all else fails, return the input text after removing common non-JSON elements
+        import re # Ensure re is imported
         clean_text = re.sub(r'^.*?(?=\{)', '', text, flags=re.DOTALL)  # Remove everything before first {
         clean_text = re.sub(r'(?<=\}).*$', '', clean_text, flags=re.DOTALL)  # Remove everything after last }
         
@@ -257,7 +340,12 @@ class ChequeProcessor:
 
     @staticmethod
     def process_multimodal_document(file_data: bytes, file_type: str, file_path: str) -> Dict[str, Any]:
-        """Process a cheque document using Vertex AI's multimodal capabilities."""
+        """Process a cheque document using Vertex AI's multimodal capabilities with retry logic."""
+        
+        default_error_signature_coords = {
+            "exists": False, "coordinates": None, "description": "Processing error", "confidence": 0.0
+        }
+
         try:
             # Initialize Vertex AI model
             model = GenerativeModel("gemini-1.5-pro", safety_settings=safety_settings)
@@ -600,14 +688,14 @@ class ChequeProcessor:
                 IMPORTANT: Your response must be a valid JSON object and NOTHING ELSE. No explanations, no markdown code blocks.
                 """  
 
-                extraction_response = model.generate_content([
-                    extraction_prompt,
-                    file_part
-                ])
+                extraction_response = ChequeProcessor._call_vertex_ai_with_retry(
+                    model,
+                    [extraction_prompt, file_part]
+                )
                 
                 extraction_json_str = extraction_response.text.strip()
-                logger.info(f"Raw extraction response length: {len(extraction_json_str)}")
-                logger.info(f"First 500 chars of extraction response: {extraction_json_str}...")
+                logger.info(f"Raw extraction response length for {file_path}: {len(extraction_json_str)}")
+                logger.debug(f"First 500 chars of extraction response for {file_path}: {extraction_json_str[:500]}...")
                 
                 # Clean up the JSON string to handle markdown code blocks and any text before/after
                 extraction_json_str = ChequeProcessor._extract_json_from_text(extraction_json_str)
@@ -615,21 +703,20 @@ class ChequeProcessor:
                 try:
                     extraction_result = json.loads(extraction_json_str)
                 except json.JSONDecodeError as e:
-                    logger.error(f"JSON parsing error in extraction: {e}, Raw response preview: {extraction_json_str[:500]}...")
-                    # Try harder to extract valid JSON
+                    logger.error(f"JSON parsing error in extraction for {file_path}: {e}, Raw response preview: {extraction_json_str[:500]}...")
+                    # Attempting more robust JSON extraction (as per your original code)
                     try:
-                        import re
-                        json_pattern = r'\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\}'
-                        match = re.search(json_pattern, extraction_json_str)
+                        import re # Ensure re is imported
+                        json_pattern = r'\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\}' # More robust regex
+                        match = re.search(json_pattern, extraction_json_str, re.DOTALL) # Added re.DOTALL
                         if match:
                             potential_json = match.group(0)
                             extraction_result = json.loads(potential_json)
-                            logger.info("Successfully extracted JSON using regex pattern")
+                            logger.info(f"Successfully extracted JSON using regex pattern for {file_path}")
                         else:
-                            raise ValueError("Could not find valid JSON pattern")
+                            raise ValueError("Could not find valid JSON pattern with regex")
                     except Exception as inner_e:
-                        logger.error(f"Advanced JSON extraction also failed: {inner_e}")
-                        # Provide fallback extraction result
+                        logger.error(f"Advanced JSON extraction also failed for {file_path}: {inner_e}")
                         extraction_result = {
                             "full_text": "Failed to extract text due to JSON parsing error",
                             "extracted_fields": []
@@ -642,13 +729,11 @@ class ChequeProcessor:
                     "pages": [{"page_num": 1, "text": extraction_result.get("full_text", "")}]
                 }
                 
-                # Extract signature coordinates
+                # Extract signature coordinates (this now has its own retry logic)
                 signature_result = ChequeProcessor.extract_signature_coordinates(file_data, file_type)
-                
-                # Add signature coordinates to the result
                 result['signature_coordinates'] = signature_result
                 
-                # If signature exists, add it to extracted fields
+                # If signature exists, add it to extracted fields (as per your original code)
                 if signature_result.get('exists', False):
                     result['extracted_fields'].append({
                         "field_name": "signature_coordinates",
@@ -656,40 +741,30 @@ class ChequeProcessor:
                         "confidence": signature_result.get('confidence', 0.0),
                         "reason": signature_result.get('description', '')
                     })
-                
             else:
-                logger.warning(f"Unsupported file type for Vertex AI processing: {file_type}")
+                logger.warning(f"Unsupported file type for Vertex AI processing: {file_type} for file {file_path}")
                 result = {
                     "error": f"Unsupported file type: {file_type}",
-                    "text": "",
-                    "pages": [],
-                    "extracted_fields": [],
-                    "signature_coordinates": {
-                        "exists": False,
-                        "coordinates": None,
-                        "description": "Unsupported file type",
-                        "confidence": 0.0
-                    }
+                    "text": "", "pages": [], "extracted_fields": [],
+                    "signature_coordinates": default_error_signature_coords
                 }
-                
             return result
             
+        except (google_exceptions.ResourceExhausted, 
+                google_exceptions.TooManyRequests, 
+                google_exceptions.ServiceUnavailable,
+                google_exceptions.DeadlineExceeded) as e:
+            logger.error(f"Multimodal processing for {file_path} failed after retries due to API limits/issues: {type(e).__name__} - {e}")
+            return {
+                "error": f"API error after retries: {str(e)}", "text": "", "pages": [],
+                "extracted_fields": [], "signature_coordinates": default_error_signature_coords
+            }
         except Exception as e:
-            logger.error(f"Error during multimodal document processing: {str(e)}")
+            logger.error(f"General error during multimodal document processing for {file_path}: {type(e).__name__} - {str(e)}")
             logger.error(traceback.format_exc())
             return {
-                "error": str(e),
-                "text": "",
-                "pages": [],
-                "document_type": "unknown",
-                "confidence": 0.0,
-                "extracted_fields": [],
-                "signature_coordinates": {
-                    "exists": False,
-                    "coordinates": None,
-                    "description": str(e),
-                    "confidence": 0.0
-                }
+                "error": str(e), "text": "", "pages": [], "document_type": "unknown", "confidence": 0.0,
+                "extracted_fields": [], "signature_coordinates": default_error_signature_coords
             }
 
     @staticmethod
