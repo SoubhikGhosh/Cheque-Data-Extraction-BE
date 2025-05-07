@@ -97,9 +97,12 @@ FIELDS = [
     {"id": 7, "name": "amount_numeric"},
     {"id": 8, "name": "currency"},
     {"id": 9, "name": "issuer_name"},
-    {"id": 10, "name": "micr_code"},
-    {"id": 11, "name": "signature_present"},
-    {"id": 12, "name": "IFSC"}
+    {"id": 10, "name": "signature_present"},
+    {"id": 11, "name": "IFSC"},
+    {"id": 12, "name": "micr_scan_instrument_number"},
+    {"id": 13, "name": "micr_scan_payee_details"},
+    {"id": 14, "name": "micr_scan_micr_acno"},
+    {"id": 15, "name": "micr_scan_instrument_type"}
 ]
 
 # ============ NEW PERFORMANCE OPTIMIZATION CONSTANTS ============
@@ -385,24 +388,74 @@ class ChequeProcessor:
                         "  4. Identify Joint Accounts: If multiple distinct names are clearly printed in the issuer area, capture all names (e.g., 'John Doe AND Jane Doe', 'Name1 / Name2'). Combine them as they appear.\n"
                         "  5. Disambiguate: CRITICALLY differentiate the issuer from the payee_name based on location (Payee is after 'PAY TO', Issuer is near signature/bottom).\n"
                         "Output: The extracted issuer name(s) or company name. If only a signature exists and no identifiable printed or stamped name is found in the designated areas, output 'Not Found'."),
-                    "micr_code": (
-                        "Objective: Extract all numeric digits comprising the full MICR (Magnetic Ink Character Recognition) code line present on the cheque.\n"
-                        "Primary Location Strategy: Target the specific bottom edge of the cheque, which contains the distinctive E-13B font used for MICR data.\n"
-                        "Format: A continuous string consisting exclusively of numeric digits (0-9). The total length of this string will vary based on all the numeric information encoded in the MICR line on the cheque. All leading and trailing zeros that are part of the numeric sequence must be included.\n"
-                        "Extraction Method - CRITICAL STEPS:\n"
-                        "  1.  Isolate MICR Band: Employ image processing techniques to precisely locate and isolate the horizontal band at the bottom of the cheque that contains the E-13B MICR typeface. This band may contain several distinct groups of numbers.\n"
-                        "  2.  Apply E-13B Specific OCR: Utilize an Optical Character Recognition (OCR) engine or model that is specifically trained, tuned, or optimized for the E-13B font. Generic OCR is generally insufficient for reliable MICR reading due to unique character shapes and susceptibility to print imperfections.\n"
-                        "  3.  Initial Character Recognition: Perform OCR on the isolated MICR band to recognize all characters present. This initial pass may include digits, MICR-specific symbols (e.g., Transit ⑆, On-Us ⑈, Amount ⑇, Dash ⑉), and potentially misrecognized characters or noise.\n"
-                        "  4.  AGGRESSIVE DIGIT-ONLY FILTERING: This is a crucial step. From the recognized characters:\n"
-                        "      * Iterate through every character extracted from the MICR band.\n"
-                        "      * Retain ONLY characters that are numeric digits (0, 1, 2, 3, 4, 5, 6, 7, 8, 9).\n"
-                        "      * Strictly remove ALL non-digit characters. This includes, but is not limited to: MICR symbols (⑆, ⑈, ⑇, ⑉), spaces, punctuation marks, alphabetic characters, or any other symbols that are not digits 0-9.\n"
-                        "  5.  Concatenate to Form Full MICR String: Combine all the filtered digits, in the order they appeared on the cheque, into a single continuous string. This string represents the complete numeric information extracted from the MICR line.\n"
-                        "Key Considerations for Robust Extraction:\n"
-                        "  * Print Quality: The E-13B specialized OCR should be designed to handle common print issues such as light or heavy ink, minor smudging, character spacing variations, and slight misalignments within the MICR band.\n"
-                        "  * Partial Legibility: If parts of the MICR line are unreadable or severely damaged, the system should extract all legible digits. The confidence score must accurately reflect any uncertainties or partial data.\n"
-                        "  * Comprehensive Digit Capture: The MICR line's length and the data it contains can vary significantly. It may include cheque numbers, bank/branch sort codes, account numbers, transaction codes, or encoded amounts, all printed in E-13B font. The system must aim to extract all such numeric data present in the identified MICR band, not being limited to a predefined number of digits or segments.\n"
-                        "Output: A single string containing all and only the numeric digits extracted from the MICR line, preserving their original sequence. If no digits can be reliably extracted from the MICR band (e.g., it's entirely missing, illegible, or contains no digits after filtering), the value should be null or an empty string, accompanied by a very low confidence score and an appropriate reason."
+                    "micr_scan_instrument_number": (
+                        "**Objective:** Extract the 6-digit cheque serial number (instrument number) from the E-13B MICR line with utmost precision.\n"
+                        "**Primary Location Strategy:** This is **strictly the first distinct numeric group** identifiable as E-13B digits at the very beginning of the MICR encoded data strip at the bottom of an Indian cheque.\n"
+                        "**Format & Delimiters (Strict Interpretation):**\n"
+                        "  * Actively search for a sequence of **exactly 6 numeric E-13B digits (0-9)**.\n"
+                        "  * This sequence is **critically expected to be enclosed by MICR 'On-Us' symbols (⑈)** on both sides (e.g., pattern: ⑈DDDDDD⑈, where D is a digit).\n"
+                        "  * The digits themselves might have minor print spacing variations (e.g., '005 656' or '005656'), but the final extracted value **must be a contiguous 6-digit string** with all internal/external spaces removed.\n"
+                        "  * **Leading zeros are integral** and MUST be preserved (e.g., '005656' is correct, not '5656').\n"
+                        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+                        "  1.  **E-13B OCR Specialization:** Employ OCR highly tuned for E-13B font. Generic OCR is insufficient.\n"
+                        "  2.  **Locate Initial Segment:** Identify the segment starting the MICR line. Prioritize a 6-digit sequence explicitly enclosed by ⑈ symbols.\n"
+                        "  3.  **Aggressive Digit Filtering:** Extract **ONLY the 6 numeric E-13B digits**. Rigorously exclude the ⑈ symbols and any other non-digit characters, OCR noise, or artifacts from the final value.\n"
+                        "  4.  **Delimiter Integrity Check:** If one or both ⑈ symbols are missing or misrecognized by OCR, but a clear, isolated 6-digit E-13B numeric sequence is unambiguously present at the very start of the MICR line, the digits may be extracted, but confidence must be lowered with a justification (e.g., 'Missing leading ⑈ delimiter'). If ambiguity arises due to missing delimiters (e.g., unclear start of sequence), prioritize not extracting or assign very low confidence.\n"
+                        "  5.  **Print Quality Handling:** If E-13B digits are smudged or broken but still interpretable as specific digits with high probability, extract them and reduce confidence, noting the specific imperfection (e.g., 'Digit '0' in instrument_number partially smudged'). If a digit is entirely illegible or ambiguous between multiple possibilities, this sub-field extraction should fail or have extremely low confidence.\n"
+                        "**Error Handling:** If a clear 6-digit E-13B sequence, ideally matching the ⑈DDDDDD⑈ pattern, cannot be confidently identified at the start of the MICR line, or if it contains non-removable non-numeric characters, this field must be null, with confidence < 0.5 and reason 'Instrument number segment not found or illegible'.\n"
+                        "**Output:** A string containing exactly 6 numeric digits. Null if criteria not met."
+                    ),
+                    "micr_scan_payee_details": (
+                        "**Objective:** Extract the 9-digit bank sort code (City-Bank-Branch identifier, often referred to as the MICR code itself) from the E-13B MICR line. Note: Per user instruction, this field is named 'micr_scan_payee_details', but it represents the bank's routing information on Indian cheques.\n"
+                        "**Primary Location Strategy:** This 9-digit numeric group **must immediately follow the `micr_scan_instrument_number` segment** in the E-13B MICR encoding sequence.\n"
+                        "**Format & Delimiters (Strict Interpretation):**\n"
+                        "  * Search for a sequence of **exactly 9 numeric E-13B digits (0-9)**.\n"
+                        "  * This sequence is **critically expected to be enclosed by a leading MICR 'On-Us' symbol (⑈) and a trailing MICR 'Transit' symbol (⑆)** (e.g., pattern: ⑈DDDDDDDDD⑆).\n"
+                        "  * Internal print spacing variations are handled as per `micr_scan_instrument_number`; output must be a contiguous 9-digit string.\n"
+                        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+                        "  1.  **Sequential Logic:** This extraction strictly depends on the successful prior identification of `micr_scan_instrument_number`.\n"
+                        "  2.  **E-13B OCR:** Apply E-13B specialized OCR to the segment following the instrument number.\n"
+                        "  3.  **Targeted Pattern Match:** Locate the 9-digit sequence matching the ⑈DDDDDDDDD⑆ pattern.\n"
+                        "  4.  **Aggressive Digit Filtering:** Extract **ONLY the 9 numeric E-13B digits**. Exclude delimiters (⑈, ⑆) and any other non-digits.\n"
+                        "  5.  **Delimiter Integrity Check:** If delimiters are imperfectly recognized but a clear 9-digit E-13B sequence is present in the correct position relative to the instrument number, extract with lowered confidence and justification. If ambiguity about the segment's boundaries or content arises due to faulty delimiters, extraction quality is compromised.\n"
+                        "  6.  **Indian Context Validation (CCCBBBAAA):** The 9-digit code typically follows a City (3), Bank (3), Branch (3) structure. This can be a soft validation. However, direct OCR of 9 clear E-13B digits as per pattern is the primary driver.\n"
+                        "  7.  **Print Quality Handling:** Apply same principles as for `micr_scan_instrument_number` regarding smudged/broken E-13B digits.\n"
+                        "**Error Handling:** If a clear 9-digit E-13B sequence matching the expected pattern and location cannot be confidently identified, this field must be null, with confidence < 0.5 and reason 'Sort code segment not found or illegible'.\n"
+                        "**Output:** A string containing exactly 9 numeric digits. Null if criteria not met."
+                    ),
+                    "micr_scan_micr_acno": (
+                        "**Objective:** Extract a 6-digit account-related or secondary transaction code from the E-13B MICR line, if structurally present.\n"
+                        "**Primary Location Strategy:** This numeric group, **if present**, **must immediately follow the `micr_scan_payee_details` (9-digit sort code) segment** in the E-13B MICR encoding.\n"
+                        "**Format & Delimiters (Strict Interpretation & Conditional Presence):**\n"
+                        "  * If this segment exists, it consists of **exactly 6 numeric E-13B digits (0-9)**.\n"
+                        "  * This sequence, when present, is **critically expected to be enclosed by a leading MICR 'Transit' symbol (⑆) and a trailing MICR 'On-Us' symbol (⑈)** (e.g., pattern: ⑆DDDDDD⑈).\n"
+                        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+                        "  1.  **Sequential Logic:** Extraction depends on successful prior identification of `micr_scan_payee_details`.\n"
+                        "  2.  **E-13B OCR:** Apply E-13B specialized OCR to the segment following the sort code.\n"
+                        "  3.  **Pattern Match & Presence Check:** Attempt to locate a 6-digit E-13B sequence matching the ⑆DDDDDD⑈ pattern.\n"
+                        "  4.  **Aggressive Digit Filtering (if present):** If found, extract **ONLY the 6 numeric E-13B digits**. Exclude delimiters (⑆, ⑈) and non-digits.\n"
+                        "  5.  **Handling Structural Absence (Critical):** If the MICR line structure indicates this 6-digit segment (as defined by ⑆DDDDDD⑈ pattern) is **not present** between the `micr_scan_payee_details` and the `micr_scan_instrument_type` (or end of MICR), the value **MUST be '000000'**. The confidence for this default value should be high (e.g., 0.95) if absence is clear from structure, with reason 'Segment structurally absent, default applied'.\n"
+                        "  6.  **Delimiter Integrity & Ambiguity:** If delimiters are imperfect but a 6-digit E-13B sequence is plausible in this position, extract with reduced confidence. If the segment is unclear, or if digits are present but don't match the 6-digit length within expected delimiters (e.g., ⑆DDDDD⑈ or ⑆DDDDDDD⑈), this specific field definition is not met. It should then be treated as structurally absent ('000000') or, if severely garbled, null with very low confidence and reason for ambiguity.\n"
+                        "  7.  **Print Quality Handling:** Apply same principles for smudged/broken E-13B digits if the segment is deemed present.\n"
+                        "**Error Handling:** If the segment is deemed present but is illegible or doesn't conform to the 6-digit requirement within its delimiters, set to null with confidence < 0.5. If structurally absent, use '000000' as specified.\n"
+                        "**Output:** A string containing exactly 6 numeric digits if present, or '000000' if structurally absent as per rules. Null for actual read errors of a present field."
+                    ),
+                    "micr_scan_instrument_type": (
+                        "**Objective:** Extract the 2-digit transaction code or instrument type from the very end of the E-13B MICR line.\n"
+                        "**Primary Location Strategy:** This is **strictly the last numeric group**, consisting of 2 E-13B digits, in the MICR encoding. It typically follows either `micr_scan_micr_acno` (if present and followed by ⑈) or `micr_scan_payee_details` (if `micr_scan_micr_acno` is absent and the 9-digit sort code is followed by ⑆, then space, then these 2 digits).\n"
+                        "**Format & Delimiters (Strict Interpretation):**\n"
+                        "  * Search for a sequence of **exactly 2 numeric E-13B digits (0-9)**.\n"
+                        "  * These digits are at the terminal end of the recognizable MICR character sequence. They are often visually separated by a larger space from any preceding MICR symbols or numbers. No specific trailing delimiter is expected after these two digits other than the end of the scannable MICR zone.\n"
+                        "  * Common Indian instrument types include '10' (Savings), '11' (Current), '29' (Govt.), '31' (CTS Standard), etc.\n"
+                        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+                        "  1.  **Sequential Logic & End-of-Line Focus:** After processing all preceding MICR segments (instrument no., sort code, conditional acno), specifically target the terminal characters of the MICR line.\n"
+                        "  2.  **E-13B OCR:** Apply E-13B specialized OCR.\n"
+                        "  3.  **Isolate Final Two Digits:** Identify the final two clearly recognizable E-13B numeric digits. These should be the absolute last digits before the MICR clear band ends or non-MICR print/paper edge is encountered.\n"
+                        "  4.  **Aggressive Digit Filtering:** Extract **ONLY the 2 numeric E-13B digits**. Exclude any preceding symbols (which belong to previous fields) or surrounding spaces.\n"
+                        "  5.  **Ambiguity at End-of-Line:** If the MICR line ends with unclear characters, or more than two digits without clear segmentation (e.g., '...XXXX10' is clear, but '...XXX102' is not for a 2-digit field if X's are also digits and not part of a previous valid field), extraction may fail or have low confidence. The system must be certain these are the *intended final two distinct digits* for this code.\n"
+                        "  6.  **Print Quality Handling:** Apply same principles for smudged/broken E-13B digits.\n"
+                        "**Error Handling:** If a clear 2-digit E-13B sequence cannot be confidently identified at the end of the MICR line, this field must be null, with confidence < 0.5 and reason 'Instrument type segment not found or illegible at end of MICR'.\n"
+                        "**Output:** A string containing exactly 2 numeric digits. Null if criteria not met."
                     ),
                     "signature_present": (
                         "**Objective:** Determine if a handwritten signature exists in the designated area.\n"
