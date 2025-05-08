@@ -560,7 +560,7 @@ class ChequeProcessor:
                         "**Error Handling:** If a clear 2-digit E-13B sequence cannot be confidently identified at the end of the MICR line in the expected position relative to prior fields, this field must be null, with confidence < 0.5 and reason 'Instrument type segment not found or illegible at end of MICR'.\n"
                         "**Output:** A string containing exactly 2 numeric digits. Null if criteria not met."
                     ),
-                "signature_present": (
+                    "signature_present": (
                         "**Objective:** Determine if a handwritten signature exists in the designated area.\n"
                         "**Primary Location Strategy:** Analyze the designated signature space, typically **bottom-right**, above the `issuer_name` (if present) and MICR line.\n"
                         "**Method:** Detect the presence of connected, free-flowing ink strokes characteristic of a handwritten signature. **Do NOT attempt to read or validate the signature's authenticity.** Distinguish from printed text, stamps, or incidental marks.\n"
