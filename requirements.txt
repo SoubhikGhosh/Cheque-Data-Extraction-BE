@@ -1,12 +1,17 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 vertexai
-pandas
-openpyxl
-pillow
-pytesseract
-pdf2image
-uuid
-requests
 google-cloud-aiplatform
+pandas
+openpyxl # For pandas to write .xlsx
+xlsxwriter # For pandas ExcelWriter engine
+pydantic
+pydantic-settings
+pillow # For PIL.Image
+python-jose[cryptography] # For potential future auth, good to have
+passlib[bcrypt] # For potential future auth
+# pdf2image and pytesseract were in the original imports but not used.
+# If they are needed, uncomment and install:
+# pdf2image
+# pytesseract
