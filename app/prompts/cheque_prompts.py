@@ -5,80 +5,234 @@ from app.constants import FIELDS
 FIELD_DESCRIPTIONS = {
     "bank_name": (
         "**Objective:** Accurately extract the official name of the issuing bank.\n"
-        # ... (rest of bank_name description)
-         "**Output:** The standardized, official bank name."
+        "**Primary Location Strategy:** Focus EXCLUSIVELY on the most prominent bank name text, typically located in the **top-left quadrant** of the cheque. This often corresponds to the bank's primary logo/branding.\n"
+        "**Disambiguation Rules:**\n"
+        "  1. If multiple bank names appear (e.g., clearing bank stamps), STRICTLY prioritize the top-left issuing bank name.\n"
+        "  2. Actively differentiate the bank name from the `payee_name` based on typical location and keywords ('PAY TO').\n"
+        "**Extraction Method:** Utilize visual layout analysis combined with knowledge of major Indian and international bank names. Cross-reference with the first 4 characters of the `IFSC` code if available and unambiguous.\n"
+        "**Data Cleansing:** Normalize variations (e.g., 'HDFC Bank' -> 'HDFC BANK LTD'). Validate against a comprehensive list of known Indian bank names. Treat 'HDFC BANK LTD' as a correct and valid name.\n"
+        "**Handling Poor Quality:** Employ image enhancement techniques (contrast, binarization) specifically on the target area if scan quality is low.\n"
+        "**Output:** The standardized, official bank name."
     ),
     "bank_branch": (
         "**Objective:** Extract the specific branch name or location identifier.\n"
-        # ... (rest of bank_branch description)
+        "**Primary Location Strategy:** Search for text indicating a location (city, area, branch designation) directly **below or adjacent to the extracted `bank_name`**.\n"
+        "**Content:** Expect branch names, city names, area codes, or combinations. Can span multiple lines.\n"
+        "**Extraction Method:**\n"
+        "  1. Look for explicit labels like 'Branch:', 'Br.', 'IFSC:' (branch info often follows IFSC).\n"
+        "  2. Capture text immediately following the `bank_name` even without explicit labels.\n"
+        "  3. **Crucially, combine text from multiple consecutive lines** if the branch address appears split.\n"
+        "  4. Apply text segmentation to isolate branch info from surrounding elements (e.g., logos, address lines unrelated to branch).\n"
+        "**Handling Partial Reads:** If only partial text is clear, use context (common Indian city/area names) to infer the most likely branch identifier. You can also use the IFSC Code to get the branch details in case of illegible text.\n"
         "**Output:** The full branch name/location string as it appears, combined across lines if necessary."
     ),
     "account_number": (
         "**Objective:** Extract the customer's bank account number.\n"
-        # ... (rest of account_number description)
+        "**Location Strategy:** Search in priority order:\n"
+        "  1. Near explicit labels: 'A/C No.', 'Account No.', 'SB Acct', 'Acct No.', etc.\n"
+        "  2. Often located near the `payee_name` line or below bank/branch details.\n"
+        "  3. Check the footer/MICR area, especially on non-standard formats (Drafts, Manager's Cheques).\n"
+        "  4. Scan both horizontal and potentially vertical orientations near the edges.\n"
+        "**Format:** Primarily numeric (typically 9-18 digits). May contain hyphens or spaces (which **must be removed** in the final output). Can occasionally be alphanumeric for specific banks/account types.\n"
+        "**Extraction Method:** Identify digit sequences matching expected lengths associated with account labels or typical locations. Apply robust digit/character recognition (0/O, 1/I, 5/S, 8/B differentiation).\n"
+        "**Handling Special Formats:** Recognize that formats like PAYINST DRAFT or Manager's Cheques may lack explicit 'A/C No.' labels; rely on typical location for these formats.\n"
         "**Output:** The extracted account number sequence (digits/alphanumerics only), with separators removed. If definitively not present, output 'Not Found'."
     ),
     "date": (
         "**Objective:** Extract the issue date and standardize it.\n"
-        # ... (rest of date description)
+        "**Primary Location Strategy:** Target the **top-right corner**, typically within designated DD MM YYYY boxes.\n"
+        "**Input Format Handling:** Recognize and parse various common formats: DDMMYYYY, DD/MM/YYYY, DD-MM-YY, DD.MM.YYYY, DD Mon YYYY, handwritten variations, dates printed over boxes, and partial pre-fills (e.g., printed '20__' with handwritten '24').\n"
+        "**Extraction Method:**\n"
+        "  1. Segment the Day (DD), Month (MM), and Year (YYYY/YY) components.\n"
+        "  2. Apply specific OCR techniques for both printed and handwritten digits within the date area.\n"
+        "  3. Use image processing to handle characters overlapping box lines.\n"
+        "  4. If multiple dates are present (e.g., stamp vs handwritten), prioritize the main handwritten/typed date in the designated boxes.\n"
+        "  5. Validate the extracted date as a plausible calendar date (e.g., day <= 31, month <= 12) within a reasonable past window (e.g., last 12 months unless context suggests older validity).\n"
         "**Output Format:** **Strictly YYYY-MM-DD.** Convert all valid inputs to this format."
     ),
     "payee_name": (
         "Objective: Extract the complete name and any associated payment instructions for the recipient (person or entity) to whom the cheque is payable.\n"
-        # ... (rest of payee_name description)
+        "Primary Location Strategy: Target the text immediately following keywords such as 'PAY', 'Pay To', 'Pay to the order of', or 'Payee:'. This information is typically found on one or more lines situated below the bank's details and above the amount_words section.\n"
+        "Content: The payee information is most often handwritten but can occasionally be typed or stamped. It primarily consists of an individual's name or a company/organization name. This section may include:\n"
+        "  * Titles (e.g., Mr., Ms., Mrs., Dr., M/s).\n"
+        "  * Company suffixes (e.g., Pvt Ltd, Ltd, Inc., LLP).\n"
+        "  * Crucially, the payee line(s) can also embed specific payment instructions directly within or alongside the name. This includes details like the payee's bank account number, bank name, and sometimes even an IFSC code (e.g., 'JOHN PETER DOE A/C 1234567890 XYZ BANK', 'ACME CORP A/C 987654321 TO BE CREDITED TO PQR BANK IFSC ABCD0123456', 'M/S INFOTECH SOLUTIONS PAY YOURSELVES A/C NO XXXXX').\n"
+        "  * The text can span a single line or wrap across multiple lines.\n"
+        "Extraction Method:\n"
+        "  1.  Comprehensive Text Block Capture: Identify and capture ALL text written on the designated payee line(s). This capture should begin immediately after the 'PAY' (or equivalent) keyword and extend for the full width of the line(s) dedicated to the payee, stopping before the amount_words or amount_numeric sections begin. Ensure to include any embedded account numbers, bank names, or other specific instructions if they form a continuous part of the text on these payee line(s). If the information spans multiple lines, it should be captured and concatenated logically (usually with a space).\n"
+        "  2.  Advanced Handwriting Analysis (Emphasis on Cursive and Connected Scripts): Employ sophisticated handwriting recognition models. These models must be highly proficient in interpreting diverse handwriting styles, with particular strength in:\n"
+        "      * Complex Cursive and Semi-Cursive Scripts: Accurately deciphering flowing, connected, and looped characters.\n"
+        "      * Connected Lettering: Handling letters that are joined together, which is common in cursive.\n"
+        "      * Variable Slant, Size, and Spacing: Adapting to inconsistencies in character formation.\n"
+        "      * Ligatures and Common Ambiguities: Recognizing and correctly interpreting common ligatures (e.g., 'rn' vs 'm', 'cl' vs 'd') and handwriting ambiguities prevalent in both English and Indian language scripts.\n"
+        "  3.  High-Precision Character Differentiation: Given that names and account details are highly sensitive to errors, the OCR process must apply maximum precision when differentiating visually similar characters. This is critical for both printed and handwritten text. Examples include (but are not limited to):\n"
+        "      * Handwritten: 'u'/'v'/'w', 'n'/'m'/'h', 'a'/'o'/'u', 'e'/'c'/'o', 'l'/'t'/'f', 'i'/'j'/'l', 'r'/'s', 'g'/'y'/'q'.\n"
+        "      * General: '0'/'O', '1'/'I'/'l', '2'/'Z', '5'/'S', '8'/'B'.\n"
+        "      Contextual understanding (e.g., common naming patterns, keywords like 'A/c') should be used to aid disambiguation, but the foundation must be robust character-level recognition.\n"
+        "  4.  Multilingual & Mixed-Script Processing: Accurately identify, transcribe, and specify the detected language for payee information, especially if it involves English or major Indian languages (e.g., Hindi, Tamil, Telugu). Handle instances of mixed-script content within the payee line where applicable.\n"
+        "  5.  Structural Awareness: While capturing the full text, maintain awareness of potential structures like 'Name part' then 'A/c No.' then 'Bank Details'. This awareness can aid in the interpretation, even if the final output is a single string.\n"
+        "  6.  Contextual Disambiguation: Clearly distinguish the payee_name block from other fields like the issuer_name based on its specific location and the preceding 'PAY' (or equivalent) keyword.\n"
         "Output: The complete text extracted from the payee line(s) as a single string. This string should include the recipient's name along with any directly associated and embedded bank account numbers, bank names, or other payment instructions if they are present as part of the continuous text on the payee line(s). If the information spans multiple lines, these should be concatenated, typically separated by a single space."
     ),
     "amount_words": (
         "**Objective:** Extract the cheque amount written in words (legal amount).\n"
-        # ... (rest of amount_words description)
+        "**Primary Location Strategy:** Target the line(s) typically starting below the `payee_name`, often beginning with 'Rupees' or the currency name.\n"
+        "**Content:** Primarily handwritten text representing the numeric value, potentially spanning two lines, often ending with 'Only'. Can include fractional units ('Paise') and Indian numbering terms ('Lakh', 'Crore').\n"
+        "**Extraction Method:**\n"
+        "  1. Capture the *entire* text phrase from the start (e.g., 'Rupees') to the end (e.g., 'Only').\n"
+        "  2. Apply advanced handwriting recognition.\n"
+        "  3. **Handle Multilingual Text:** Recognize and correctly interpret Indian language number words (e.g., 'हजार', 'लाख', 'കോടി') and currency names ('रुपये').\n"
+        "  4. **Validate:** Use the recognized `amount_numeric` as a strong cross-validation signal to confirm the accuracy of the extracted words.\n"
+        "  5. Handle hyphenation and line breaks correctly if the amount spans multiple lines.\n"
         "**Output:** The full amount in words string."
     ),
     "amount_numeric": (
         "**Objective:** Extract the cheque amount written in figures (courtesy amount).\n"
-        # ... (rest of amount_numeric description)
+        "**Primary Location Strategy:** Target the designated box or area on the **right-middle side**, often preceded/followed by a currency symbol or code.\n"
+        "**Format:** Numeric digits, possibly with commas (thousands) and a period (decimal). Often ends with '/-' or '.00'. Currency symbols (₹, $) may be adjacent.\n"
+        "**Extraction Method:**\n"
+        "  1. Isolate the numeric digits within the designated amount box/area.\n"
+        "  2. Apply robust digit recognition, handling potential confusion (1/7, 4/9, etc.) and various handwriting styles.\n"
+        "  3. **Crucially, PREPROCESS the extracted string:** Remove any currency symbols (₹, $, INR), thousands separators (,), and common trailing characters ('/-') BEFORE outputting.\n"
+        "  4. Retain the decimal separator (.) and subsequent digits if present (e.g., '1500.50').\n"
+        "  5. Standardize formats: '1500' and '1500.00' should both be represented consistently if required (e.g., always include '.00' or never include if zero). Clarify desired output format.\n"
+        "  6. **Validate:** Use the recognized `amount_words` for cross-validation.\n"
         "**Output:** The cleaned, purely numeric amount string (e.g., '1500.00', '1500.50', '12000')."
     ),
     "issuer_name": (
         "Objective: Extract the name(s) of the account holder(s) or the company name issuing the cheque (payer).\n"
-        # ... (rest of issuer_name description)
+        "Primary Location Strategy: Search the area below the signature space, typically on the bottom-right, positioned above the MICR line. Also, check for printed company names, potentially located in the top-left quadrant under the bank details.\n"
+        "Content: Look for printed text or rubber stamp impressions representing:\n"
+        "  * An individual's name.\n"
+        "  * Multiple individuals' names (for joint accounts), often separated by 'AND' or similar conjunctions.\n"
+        "  * A company or organization name. This might be prefixed with terms like 'FOR' (e.g., 'FOR ABC ENTERPRISES').\n"
+        "Extraction Method:\n"
+        "  1. Focus OCR on identifying printed or stamped text in the primary location(s). Do NOT attempt to read the handwritten signature itself for this field.\n"
+        "  2. Handle Signatures Overlap: If a signature overlaps the printed/stamped name, apply image segmentation techniques to isolate the underlying text/stamp from the signature strokes.\n"
+        "  3. Identify Company Names: If the text follows the pattern 'FOR [Company Name]', extract '[Company Name]'.\n"
+        "  4. Identify Joint Accounts: If multiple distinct names are clearly printed in the issuer area, capture all names (e.g., 'John Doe AND Jane Doe', 'Name1 / Name2'). Combine them as they appear.\n"
+        "  5. Disambiguate: CRITICALLY differentiate the issuer from the payee_name based on location (Payee is after 'PAY TO', Issuer is near signature/bottom).\n"
         "Output: The extracted issuer name(s) or company name. If only a signature exists and no identifiable printed or stamped name is found in the designated areas, output 'Not Found'."
     ),
     "micr_scan_instrument_number": (
         "**Objective:** Extract the 6-digit cheque serial number (instrument number) from the E-13B MICR line with utmost precision.\n"
-        # ... (rest of micr_scan_instrument_number description)
+        "**Overall MICR Structure Expectation:** The full MICR line on an Indian cheque is generally understood to be composed of segments typically arranged in a specific order. This field, `micr_scan_instrument_number`, is the **first segment** in this sequence.\n"
+        "**Positional Definition:** This field is **strictly the first distinct numeric group** identifiable as E-13B digits, located at the **absolute beginning** of the MICR encoded data strip at the bottom of an Indian cheque.\n"
+        "**Pattern and Delimiters (Strict Interpretation):**\n"
+        "  * Actively search for a sequence of **exactly 6 numeric E-13B digits (0-9)**.\n"
+        "  * This sequence is **critically expected to be enclosed by MICR 'On-Us' symbols (⑈)** on both sides, forming the pattern: `⑈DDDDDD⑈` (where D is a digit).\n"
+        "  * **Preceded by:** Nothing; this segment marks the start of the MICR line.\n"
+        "  * **Followed by:** The `micr_scan_payee_details` segment. The end of the `micr_scan_instrument_number` segment is defined by its trailing `⑈` symbol. The `micr_scan_payee_details` segment is expected to begin immediately after this, typically commencing with its own leading `⑈` symbol.\n"
+        "  * The digits themselves might have minor print spacing variations (e.g., '005 656' or '005656'), but the final extracted value **must be a contiguous 6-digit string** with all internal/external spaces removed.\n"
+        "  * **Leading zeros are integral** and MUST be preserved (e.g., '005656' is correct, not '5656').\n"
+        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+        "  1.  **E-13B OCR Specialization:** Employ OCR highly tuned for E-13B font. Generic OCR is insufficient.\n"
+        "  2.  **Locate Initial Segment:** Identify the segment at the very start of the MICR line. Prioritize a 6-digit sequence explicitly matching the `⑈DDDDDD⑈` pattern.\n"
+        "  3.  **Aggressive Digit Filtering:** Extract **ONLY the 6 numeric E-13B digits**. Rigorously exclude the `⑈` symbols and any other non-digit characters, OCR noise, or artifacts from the final value.\n"
+        "  4.  **Delimiter Integrity Check:** If one or both `⑈` symbols are missing or misrecognized by OCR, but a clear, isolated 6-digit E-13B numeric sequence is unambiguously present at the very start of the MICR line, the digits may be extracted, but confidence must be lowered with a justification (e.g., 'Missing leading/trailing ⑈ delimiter for instrument_number'). If ambiguity arises due to missing delimiters (e.g., unclear start of sequence), prioritize not extracting or assign very low confidence.\n"
+        "  5.  **Print Quality Handling:** If E-13B digits are smudged or broken but still interpretable as specific digits with high probability, extract them and reduce confidence, noting the specific imperfection (e.g., 'Digit '0' in instrument_number partially smudged'). If a digit is entirely illegible or ambiguous between multiple possibilities, this sub-field extraction should fail or have extremely low confidence.\n"
+        "**Error Handling:** If a clear 6-digit E-13B sequence, ideally matching the `⑈DDDDDD⑈` pattern, cannot be confidently identified at the start of the MICR line, or if it contains non-removable non-numeric characters, this field must be null, with confidence < 0.5 and reason 'Instrument number segment not found or illegible'.\n"
         "**Output:** A string containing exactly 6 numeric digits. Null if criteria not met."
     ),
     "micr_scan_payee_details": (
         "**Objective:** Extract the 9-digit bank sort code (City-Bank-Branch identifier, often referred to as the MICR code itself) from the E-13B MICR line. Note: Per user instruction, this field is named 'micr_scan_payee_details', but it represents the bank's routing information on Indian cheques.\n"
-        # ... (rest of micr_scan_payee_details description)
+        "**Overall MICR Structure Expectation:** This field is the **second primary segment** in the MICR line, following the `micr_scan_instrument_number`.\n"
+        "**Positional Definition:** This 9-digit numeric group **must immediately follow the complete `micr_scan_instrument_number` segment** (i.e., after the `micr_scan_instrument_number`'s trailing `⑈` symbol).\n"
+        "**Pattern and Delimiters (Strict Interpretation):**\n"
+        "  * Search for a sequence of **exactly 9 numeric E-13B digits (0-9)**.\n"
+        "  * This sequence is **critically expected to be enclosed by a leading MICR 'On-Us' symbol (⑈) and a trailing MICR 'Transit' symbol (⑆)**, forming the pattern: `⑈DDDDDDDDD⑆`.\n"
+        "  * **Preceded by:** The complete `micr_scan_instrument_number` segment (which ends with `⑈`). This `micr_scan_payee_details` segment starts with its own `⑈` delimiter.\n"
+        "  * **Followed by:** The `micr_scan_micr_acno` segment (which is expected to start with `⑆`) or, if `micr_scan_micr_acno` is structurally absent, by the `micr_scan_instrument_type` segment. The end of the `micr_scan_payee_details` segment is defined by its trailing `⑆` symbol.\n"
+        "  * Internal print spacing variations are handled as per `micr_scan_instrument_number`; output must be a contiguous 9-digit string.\n"
+        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+        "  1.  **Sequential Logic:** This extraction strictly depends on the successful prior identification of `micr_scan_instrument_number` and its trailing delimiter.\n"
+        "  2.  **E-13B OCR:** Apply E-13B specialized OCR to the segment following the identified `micr_scan_instrument_number`.\n"
+        "  3.  **Targeted Pattern Match:** Locate the 9-digit sequence matching the `⑈DDDDDDDDD⑆` pattern in the expected position.\n"
+        "  4.  **Aggressive Digit Filtering:** Extract **ONLY the 9 numeric E-13B digits**. Exclude delimiters (`⑈`, `⑆`) and any other non-digits.\n"
+        "  5.  **Delimiter Integrity Check:** If delimiters are imperfectly recognized but a clear 9-digit E-13B sequence is present in the correct position relative to the instrument number, extract with lowered confidence and justification (e.g., 'Imperfect leading ⑈ or trailing ⑆ for payee_details'). If ambiguity about the segment's boundaries or content arises due to faulty delimiters, extraction quality is compromised.\n"
+        "  6.  **Indian Context Validation (CCCBBBAAA):** The 9-digit code typically follows a City (3), Bank (3), Branch (3) structure. This can be a soft validation. However, direct OCR of 9 clear E-13B digits as per pattern is the primary driver.\n"
+        "  7.  **Print Quality Handling:** Apply same principles as for `micr_scan_instrument_number` regarding smudged/broken E-13B digits.\n"
+        "**Error Handling:** If a clear 9-digit E-13B sequence matching the expected `⑈DDDDDDDDD⑆` pattern and location cannot be confidently identified, this field must be null, with confidence < 0.5 and reason 'Sort code segment (payee_details) not found or illegible'.\n"
         "**Output:** A string containing exactly 9 numeric digits. Null if criteria not met."
     ),
     "micr_scan_micr_acno": (
         "**Objective:** Extract a 6-digit account-related or secondary transaction code from the E-13B MICR line, if structurally present.\n"
-        # ... (rest of micr_scan_micr_acno description)
+        "**Overall MICR Structure Expectation:** This field, if present, is the **third segment** in the MICR line, following `micr_scan_payee_details`. Its presence is conditional based on the cheque's MICR layout.\n"
+        "**Positional Definition:** This numeric group, **if present**, **must immediately follow the complete `micr_scan_payee_details` (9-digit sort code) segment** (i.e., after the `micr_scan_payee_details`' trailing `⑆` symbol).\n"
+        "**Pattern and Delimiters (Strict Interpretation & Conditional Presence):**\n"
+        "  * If this segment exists, it consists of **exactly 6 numeric E-13B digits (0-9)**.\n"
+        "  * This sequence, when present, is **critically expected to be enclosed by a leading MICR 'Transit' symbol (⑆) and a trailing MICR 'On-Us' symbol (⑈)**, forming the pattern: `⑆DDDDDD⑈`.\n"
+        "  * **Preceded by:** The complete `micr_scan_payee_details` segment (which ends with `⑆`). If present, this `micr_scan_micr_acno` segment starts with its own `⑆` delimiter.\n"
+        "  * **Followed by:** If present, the `micr_scan_instrument_type` segment. The end of the `micr_scan_micr_acno` segment is defined by its trailing `⑈` symbol.\n"
+        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+        "  1.  **Sequential Logic:** Extraction depends on successful prior identification of `micr_scan_payee_details` and its trailing delimiter.\n"
+        "  2.  **E-13B OCR:** Apply E-13B specialized OCR to the segment following the identified `micr_scan_payee_details`.\n"
+        "  3.  **Pattern Match & Presence Check:** Attempt to locate a 6-digit E-13B sequence matching the `⑆DDDDDD⑈` pattern in the expected position.\n"
+        "  4.  **Aggressive Digit Filtering (if present):** If found, extract **ONLY the 6 numeric E-13B digits**. Exclude delimiters (`⑆`, `⑈`) and non-digits.\n"
+        "  5.  **Handling Structural Absence (Critical):** If the MICR line structure indicates this 6-digit segment (as defined by the `⑆DDDDDD⑈` pattern) is **not present** between the `micr_scan_payee_details` (ending in `⑆`) and the `micr_scan_instrument_type` (or end of MICR line), the value for `micr_scan_micr_acno` **MUST be '000000'**. The confidence for this default value should be high (e.g., 0.95) if absence is clear from structure, with reason 'micr_acno segment structurally absent, default applied'.\n"
+        "  6.  **Delimiter Integrity & Ambiguity:** If delimiters are imperfect but a 6-digit E-13B sequence is plausible in this position, extract with reduced confidence and justification. If the segment is unclear, or if digits are present but don't match the 6-digit length within expected delimiters (e.g., `⑆DDDDD⑈` or `⑆DDDDDDD⑈`), this specific field definition is not met. It should then be treated as structurally absent ('000000') or, if severely garbled, null with very low confidence and reason for ambiguity (e.g., 'micr_acno segment present but malformed').\n"
+        "  7.  **Print Quality Handling:** Apply same principles for smudged/broken E-13B digits if the segment is deemed present and not structurally absent.\n"
+        "**Error Handling:** If the segment is deemed present (i.e., not structurally absent) but is illegible or doesn't conform to the 6-digit requirement within its delimiters, set to null with confidence < 0.5 and reason 'micr_acno segment present but illegible/non-conforming'. If structurally absent, use '000000' as specified.\n"
         "**Output:** A string containing exactly 6 numeric digits if present and correctly parsed, or '000000' if structurally absent as per rules. Null for actual read errors of a present field that cannot be confidently extracted."
     ),
     "micr_scan_instrument_type": (
         "**Objective:** Extract the 2-digit transaction code or instrument type from the very end of the E-13B MICR line.\n"
-        # ... (rest of micr_scan_instrument_type description)
+        "**Overall MICR Structure Expectation:** This field is the **fourth and typically final segment** in the MICR line.\n"
+        "**Positional Definition:** This is **strictly the last numeric group**, consisting of 2 E-13B digits, found at the **terminal end** of the MICR encoding sequence.\n"
+        "**Pattern and Delimiters (Strict Interpretation):**\n"
+        "  * Search for a sequence of **exactly 2 numeric E-13B digits (0-9)**.\n"
+        "  * These digits are at the terminal end of the recognizable MICR character sequence. They are often visually separated by a larger space from any preceding MICR symbols or numbers, especially if `micr_scan_micr_acno` is absent. No specific trailing delimiter is expected after these two digits other than the end of the scannable MICR zone.\n"
+        "  * **Preceded by:**\n"
+        "      * If `micr_scan_micr_acno` is present and parsed (ending with pattern `⑆DDDDDD⑈`): This 2-digit `micr_scan_instrument_type` segment will appear immediately after the trailing `⑈` of `micr_scan_micr_acno`.\n"
+        "      * If `micr_scan_micr_acno` is structurally absent (or defaulted to '000000'): This 2-digit `micr_scan_instrument_type` segment will appear after the trailing `⑆` of the `micr_scan_payee_details` segment (pattern `⑈DDDDDDDDD⑆`). There might be a noticeable space between the `⑆` and these two digits.\n"
+        "  * **Followed by:** Nothing (end of the MICR scannable zone/clear band).\n"
+        "  * Common Indian instrument types include '10' (Savings), '11' (Current), '29' (Govt.), '31' (CTS Standard), etc.\n"
+        "**Extraction Method - CRITICAL STEPS & ROBUSTNESS:**\n"
+        "  1.  **Sequential Logic & End-of-Line Focus:** After processing all preceding MICR segments (`micr_scan_instrument_number`, `micr_scan_payee_details`, and conditional `micr_scan_micr_acno`), specifically target the terminal characters of the MICR line.\n"
+        "  2.  **E-13B OCR:** Apply E-13B specialized OCR to the identified terminal region.\n"
+        "  3.  **Isolate Final Two Digits:** Identify the final two clearly recognizable E-13B numeric digits. These should be the absolute last digits before the MICR clear band ends or non-MICR print/paper edge is encountered, considering the preceding field's ending delimiter.\n"
+        "  4.  **Aggressive Digit Filtering:** Extract **ONLY the 2 numeric E-13B digits**. Exclude any preceding symbols (which properly belong to previous fields if not already accounted for) or surrounding spaces.\n"
+        "  5.  **Ambiguity at End-of-Line:** If the MICR line ends with unclear characters, or more than two digits without clear segmentation from a preceding valid field (e.g., if the sequence is `...⑈XXYY` where `XX` are the target digits, it is clear; but if it's `...⑆XXXXYY` and `XXXX` was not a valid `micr_scan_micr_acno`, this could be ambiguous for a 2-digit field if `XX` are also digits), extraction may fail or have low confidence. The system must be certain these are the *intended final two distinct digits* for this code.\n"
+        "  6.  **Print Quality Handling:** Apply same principles for smudged/broken E-13B digits.\n"
+        "**Error Handling:** If a clear 2-digit E-13B sequence cannot be confidently identified at the end of the MICR line in the expected position relative to prior fields, this field must be null, with confidence < 0.5 and reason 'Instrument type segment not found or illegible at end of MICR'.\n"
         "**Output:** A string containing exactly 2 numeric digits. Null if criteria not met."
     ),
     "signature_present": (
         "**Objective:** Determine if a handwritten signature exists in the designated area.\n"
-        # ... (rest of signature_present description)
+        "**Primary Location Strategy:** Analyze the designated signature space, typically **bottom-right**, above the `issuer_name` (if present) and MICR line.\n"
+        "**Method:** Detect the presence of connected, free-flowing ink strokes characteristic of a handwritten signature. **Do NOT attempt to read or validate the signature's authenticity.** Distinguish from printed text, stamps, or incidental marks.\n"
         "**Output:** **Strictly 'YES' or 'NO'.**"
     ),
     "IFSC": (
         "**Objective:** Extract the 11-character Indian Financial System Code.\n"
-        # ... (rest of IFSC description)
+        "**Primary Location Strategy:** Search near the `bank_name` and `bank_branch` details. Look for explicit labels: 'IFSC', 'IFS Code', 'IFSC Code'.\n"
+        "**Format:** **Strictly 11 alphanumeric characters.**\n"
+        "  - Format: **AAAA0XXXXXX**\n"
+        "  - First 4 characters: Alphabetic (Bank Code)\n"
+        "  - 5th character: MUST BE ZERO ('0')\n"
+        "  - Last 6 characters: Alphanumeric (Branch Code)\n"
+        "**Extraction Method:**\n"
+        "  1. Scan the target area for strings matching the 11-character pattern.\n"
+        "  2. Apply robust character recognition, paying attention to common confusions (0/O, 1/I, S/5, B/8).\n"
+        "  3. **VALIDATE RIGOROUSLY:**\n"
+        "     a. Check total length is exactly 11.\n"
+        "     b. Verify the 5th character is '0'.\n"
+        "     c. Verify the first 4 characters are alphabetic.\n"
+        "  4. Cross-reference the first 4 characters with the extracted `bank_name`'s expected code if possible.\n"
+        "  5. Handle specific layouts for non-standard cheque types (Drafts, Manager's Cheques) where IFSC might be positioned differently.\n"
         "**Output:** The validated 11-character IFSC code. If validation fails, output 'Error' / 'Not Found'."
     ),
     "currency": (
         "**Objective:** Identify the currency of the transaction.\n"
-        # ... (rest of currency description)
+        "**Extraction Method (Prioritized):**\n"
+        "  1. **Explicit Code:** Look for printed ISO 4217 codes (e.g., 'INR', 'USD', 'EUR') on the cheque body.\n"
+        "  2. **Numeric Symbol:** Identify currency symbols adjacent to `amount_numeric` (e.g., '₹', '$', '£', '€'). Normalize '₹' and text 'INR' as Indian Rupee.\n"
+        "  3. **Words Amount:** Extract currency words from `amount_words` (e.g., 'Rupees', 'Dollars', 'रुपये'). Handle multilingual terms.\n"
+        "  4. **Contextual Default:** If an Indian bank (`bank_name`, `IFSC`) is identified and no other currency indicators are present, default to 'INR'.\n"
         "**Output:** The standard 3-letter ISO 4217 currency code (e.g., 'INR', 'USD', 'EUR')."
     )
 }
+
 # Ensure all descriptions are filled in as they were in your original code.
 # For brevity, I've truncated them here.
 
