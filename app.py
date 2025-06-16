@@ -320,7 +320,7 @@ class ChequeProcessor:
                     "text_segment": "1500/-",
                     "reason": null,
                     "language": "English"
-                    
+
                 """
 
                 extraction_response = ChequeProcessor._call_vertex_ai_with_retry(
@@ -400,6 +400,7 @@ class ChequeProcessor:
 def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id: str):
     """
     Process multiple zip files and generate an Excel report.
+    This version recursively finds all images at any depth and consolidates them.
     """
     logger.info(f"Starting process_zip_files for job {job_id}")
     job_start_time = time.time()
@@ -411,145 +412,117 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
         output_dir = os.path.join(temp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
         
-        folder_results = {}
+        # CHANGED: Use a single list to hold all file information from all zips.
+        all_files_to_process = []
         
-        for zip_index, (zip_content, zip_name) in enumerate(zip(file_contents, file_names)):
-            zip_dir = os.path.join(temp_dir, f"zip_{zip_index}_{os.path.splitext(zip_name)[0]}")
+        for zip_content, zip_name in zip(file_contents, file_names):
+            zip_dir = os.path.join(temp_dir, f"unzipped_{os.path.splitext(zip_name)[0]}")
             os.makedirs(zip_dir, exist_ok=True)
             
             with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
                 zf.extractall(zip_dir)
             
-            folder_files = {}
-            
-            for root, dirs, files in os.walk(zip_dir):
-                if root == zip_dir:
-                    continue
-                
-                rel_path = os.path.relpath(root, zip_dir)
-                folder_name = rel_path if rel_path != '.' else zip_name
-                
-                if not files:
-                    continue
-                
-                if folder_name not in folder_results:
-                    folder_results[folder_name] = []
-                
-                if folder_name not in folder_files:
-                    folder_files[folder_name] = []
-                
+            # CHANGED: The os.walk loop is now simplified to recursively find all files.
+            logger.info(f"Recursively searching for images in {zip_name}...")
+            for root, _, files in os.walk(zip_dir):
                 for file in files:
                     if file.startswith('.') or file.startswith('~'):
                         continue
                     
                     file_path = os.path.join(root, file)
-                    total_files += 1
-                    
                     _, ext = os.path.splitext(file)
                     
                     supported_extensions = {
-                        '.jpg': 'image/jpeg',
-                        '.jpeg': 'image/jpeg',
-                        '.png': 'image/png',
-                        '.tiff': 'image/tiff',
-                        '.tif': 'image/tiff'
+                        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                        '.png': 'image/png', '.tiff': 'image/tiff', '.tif': 'image/tiff'
                     }
                     
                     if ext.lower() not in supported_extensions:
                         logger.warning(f"Unsupported file type skipped: {file_path}")
                         continue
-                    
+                        
                     file_type = supported_extensions[ext.lower()]
                     
                     with open(file_path, 'rb') as f:
                         file_data = f.read()
                     
-                    folder_files[folder_name].append({
-                        'path': file_path,
+                    # We use the relative path for clearer identification in the final report.
+                    relative_path = os.path.relpath(file_path, temp_dir)
+
+                    all_files_to_process.append({
+                        'path': relative_path,  # Use relative path for the report
                         'data': file_data,
                         'type': file_type
                     })
+        
+        total_files = len(all_files_to_process)
+        logger.info(f"Found a total of {total_files} image files across all zip archives.")
+
+        # CHANGED: Process the single, consolidated list of files in batches.
+        final_results = []
+        for i in range(0, total_files, BATCH_SIZE):
+            batch = all_files_to_process[i:i+BATCH_SIZE]
+            logger.info(f"Processing batch {i//BATCH_SIZE + 1} with {len(batch)} files")
             
-            for folder_name, files_list in folder_files.items():
-                logger.info(f"Processing folder {folder_name} with {len(files_list)} files")
-                
-                for i in range(0, len(files_list), BATCH_SIZE):
-                    batch = files_list[i:i+BATCH_SIZE]
-                    logger.info(f"Processing batch {i//BATCH_SIZE + 1} with {len(batch)} files")
-                    
-                    batch_results = ChequeProcessor.process_document_batch(batch)
-                    
-                    for result in batch_results:
-                        file_path = result.get('file_path', '')
-                        
-                        for field in result.get("extracted_fields", []):
-                            field_entry = {
-                                "filepath": file_path,
-                                "field_name": field.get("field_name", ""),
-                                "value": field.get("value", ""),
-                                "confidence": field.get("confidence", 0.0),
-                                "reason": field.get("reason", "")
-                            }
-                            folder_results[folder_name].append(field_entry)
-                        
-                        processed_files += 1
-                        
-                        if processed_files % 10 == 0:
-                            elapsed_time = time.time() - job_start_time
-                            if processed_files > 0 and total_files > 0:
-                                files_per_second = processed_files / elapsed_time
-                                remaining_files = total_files - processed_files
-                                eta = (remaining_files / files_per_second) if files_per_second > 0 else 0
-                                logger.info(
-                                    f"Progress: {processed_files}/{total_files} files "
-                                    f"({processed_files/total_files*100:.1f}%). "
-                                    f"ETA: {eta:.2f} seconds."
-                                )
+            batch_results = ChequeProcessor.process_document_batch(batch)
+            
+            for result in batch_results:
+                final_results.append(result) # Append the whole result dictionary
+                processed_files += 1
+
+                if processed_files % 10 == 0:
+                    elapsed_time = time.time() - job_start_time
+                    if processed_files > 0 and total_files > 0:
+                        files_per_second = processed_files / elapsed_time
+                        remaining_files = total_files - processed_files
+                        eta = (remaining_files / files_per_second) if files_per_second > 0 else 0
+                        logger.info(
+                            f"Progress: {processed_files}/{total_files} files "
+                            f"({processed_files/total_files*100:.1f}%). "
+                            f"ETA: {eta:.2f} seconds."
+                        )
 
         excel_path = os.path.join(output_dir, f"cheque_extraction_results_{job_id}.xlsx")
         
+        # CHANGED: Excel writing logic is simplified for a single sheet.
+        logger.info("Generating consolidated Excel report...")
         with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-            for folder_name, results in folder_results.items():
-                if not results:
-                    continue
+            if final_results:
+                # Transform the flat list of results into a structured format for the DataFrame
+                data_for_df = []
+                for item in final_results:
+                    filepath = item.get("file_path", "Unknown File")
+                    row = {"filepath": filepath}
+                    for field in item.get("extracted_fields", []):
+                        field_name = field.get("field_name")
+                        if field_name:
+                            row[field_name] = field.get("value")
+                            row[f"{field_name}_conf"] = field.get("confidence")
+                            if field.get("reason"):
+                                row[f"{field_name}_reason"] = field.get("reason")
+                    data_for_df.append(row)
+
+                df = pd.DataFrame(data_for_df)
                 
-                filepath_groups = {}
+                # Define column order based on the FIELDS constant
+                cols = ["filepath"]
+                for field in FIELDS:
+                    field_name = field["name"]
+                    if field_name in df.columns:
+                        cols.append(field_name)
+                        cols.append(f"{field_name}_conf")
+                        if f"{field_name}_reason" in df.columns:
+                            cols.append(f"{field_name}_reason")
                 
-                for item in results:
-                    filepath = item["filepath"]
-                    if filepath not in filepath_groups:
-                        filepath_groups[filepath] = {"filepath": filepath}
-                    
-                    if "field_name" in item:
-                        field_name = item["field_name"]
-                        filepath_groups[filepath][field_name] = item["value"]
-                        filepath_groups[filepath][f"{field_name}_conf"] = item["confidence"]
-                        
-                        if item.get("reason"):
-                            filepath_groups[filepath][f"{field_name}_reason"] = item["reason"]
+                # Filter out columns that don't exist in the DataFrame
+                existing_cols = [col for col in cols if col in df.columns]
+                if existing_cols:
+                    df = df[existing_cols]
                 
-                if filepath_groups:
-                    df = pd.DataFrame(list(filepath_groups.values()))
-                    
-                    # Define column order based on the simplified FIELDS
-                    cols = ["filepath"]
-                    for field in FIELDS:
-                        field_name = field["name"]
-                        if field_name in df.columns:
-                            cols.append(field_name)
-                            cols.append(f"{field_name}_conf")
-                            if f"{field_name}_reason" in df.columns:
-                                cols.append(f"{field_name}_reason")
-                    
-                    cols = [col for col in cols if col in df.columns]
-                    if cols:
-                        df = df[cols]
-                    
-                    sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
-                    sheet_name = (sheet_name[:28] + '...') if len(sheet_name) > 31 else sheet_name
-                    
-                    if not df.empty:
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                if not df.empty:
+                    # Write to a single sheet named 'All_Results'
+                    df.to_excel(writer, sheet_name='All_Results', index=False)
+                    logger.info("Successfully wrote results to 'All_Results' sheet.")
 
         job_end_time = time.time()
         processed_jobs[job_id] = {
@@ -575,7 +548,6 @@ def process_zip_files(file_contents: List[bytes], file_names: List[str], job_id:
             "error_message": str(e), "error_traceback": traceback.format_exc()
         }
         raise
-
 @app.post("/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
     """
