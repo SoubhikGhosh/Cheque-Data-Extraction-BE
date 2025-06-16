@@ -90,7 +90,7 @@ FIELDS = [
 ]
 
 # ============ PERFORMANCE OPTIMIZATION CONSTANTS ============
-MAX_WORKERS = 80
+MAX_WORKERS = 120
 BATCH_SIZE = 40
 
 # Create a thread pool executor at the module level
@@ -107,7 +107,7 @@ class ChequeProcessor:
     def _call_vertex_ai_with_retry(
         model_instance: GenerativeModel,
         prompt_parts: List[Any],
-        max_retries: int = 5,
+        max_retries: int = 100,
         initial_delay: float = 1.0,
         exponential_base: float = 2.0,
         jitter: bool = True
@@ -182,7 +182,7 @@ class ChequeProcessor:
         """Process a cheque document using Vertex AI to extract date and amount."""
         
         try:
-            model = GenerativeModel("gemini-1.5-flash", safety_settings=safety_settings)
+            model = GenerativeModel("gemini-1.5-flash-002", safety_settings=safety_settings)
             
             result = {
                 "text": "",
@@ -676,4 +676,4 @@ if __name__ == "__main__":
     # Start the FastAPI server
     # Note: For production, it's better to run uvicorn without reload=True
     # Example: uvicorn.run("your_main_file_name:app", host="0.0.0.0", port=8080)
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8080, reload=True)
