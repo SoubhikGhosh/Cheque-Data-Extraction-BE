@@ -194,36 +194,51 @@ class ChequeProcessor:
             # This dictionary is now defined inside the method to use the dynamic years
             field_descriptions = {
                 "date": (
-                    "**Objective:** Extract the 8-digit date from the designated DDMMYYYY boxes on an Indian cheque with maximum precision.\n"
-                    "**Input Assumption:** You will receive a pre-cropped image focusing exclusively on the date field, typically located in the top-right corner of the cheque.\n"
-                    "**Primary Directive: Focus on the DDMMYYYY Grid.** Your logic must be optimized for a grid of 8 boxes labeled `D D M M Y Y Y Y`. This is the only format you should expect. Ignore any other date formats on the cheque.\n\n"
-                    "**Step-by-Step Extraction and Validation Logic:**\n"
-                    "1.  **Isolate Digits from Box Lines (Crucial):** The handwritten or printed digits may touch, overlap, or be written directly on the printed lines of the boxes. Your image analysis MUST digitally ignore the box grid itself, treating it as background noise. Your entire focus should be on the ink that forms the numerals. This is the most common failure point; be rigorous in separating the digit from the box.\n"
-                    "2.  **Handle Corrections & Strikethroughs:** Actively look for corrected dates. A correction can be a **horizontal line** through all 8 digits or **individual vertical lines** striking out single digits. If a corrected date is present, you MUST extract the new, valid date written nearby. The presence of a strikethrough must be documented in the 'reason' field for the confidence score.\n"
-                    "3.  **Apply Temporal Heuristic (Strict Rule):**\n"
-                    f"    * **CRITICAL VALIDATION RULE:** The current year is **{current_year}**. A valid cheque date will almost certainly be for the year **{current_year}** or late **{previous_year}**. \n"
+                "**Objective:** You are a hyper-precise OCR engine. Your task is to extract the 8-digit date from the provided pre-cropped image of a cheque's date grid."
+                    "\n\n"
+                    "**CRITICAL INTERNAL PROCESS (Follow these steps before giving your answer):**"
+                    "\n"
+                    "1.  **Digit-by-Digit Analysis:** Mentally scan each of the 8 boxes. Note the digit in each box, or make an educated guess based on context if it is unclear. The primary challenge is to ignore the printed box lines and focus only on the handwritten ink."
+                    "\n"
+                    "2.  **Correction Check:** Look for any strikethroughs (horizontal or vertical). If a corrected date is present, you must use the new, valid date."
+                    "\n"
+                    "3.  **Apply Temporal Rule:** The current year is **{current_year}**. A valid cheque date will almost certainly be for the year **{current_year}** or late **{previous_year}**. \n"
                     f"    * An extracted year like '{previous_year - 1}' or '{current_year + 1}' is extremely improbable. Use this rule to disambiguate OCR errors. For example, if the last digit of the year is ambiguous between a '{str(current_year)[-1]}' and a '{str(current_year + 1)[-1]}', you must conclude it is '{str(current_year)[-1]}' to form '{current_year}', as '{current_year + 1}' is not a plausible cheque date. A low confidence score must be assigned if the only possible reading is an invalid year.\n"
-                    "4.  **Combine and Validate:** Assemble the 8 extracted digits. Perform a final logical check to ensure it's a valid calendar date (e.g., day is 1-31, month is 1-12). An impossible date like '31-04-2025' should be flagged as an error with very low confidence.\n\n"
-                    "**Output Format:** Your final output for this field **must be a string in the strict YYYY-MM-DD format.**"
+                    "\n"
+                    "4.  **Assemble and Validate:** Combine the recognized digits. If the result is not a valid calendar date (e.g., '31-04-2025'), it is invalid."
+                    "\n\n"
+                    "**FINAL OUTPUT INSTRUCTION:**"
+                    "\n"
+                    "Your final output MUST BE A SINGLE STRING in the strict 'DD-MM-YYYY' format. "
+                    "Do NOT include your internal thoughts, labels, or any other text. "
+                    "If the date is unreadable or invalid after following all rules, provide a single empty string: ''."
+                    "\n\n"
+                    "**Example Input:** The provided image."
+                    "**Example Output:** 22-02-2025"
                 ),
                 "amount": (
-                    "**Objective:** Accurately extract the numerical amount (courtesy amount) from an image of an Indian cheque.\n"
-                    "**Input Assumption:** The input image is the **right-hand portion of a standard Indian cheque**. Your primary task is to locate the rectangular box designated for the amount in figures, which is almost always prefixed with the Rupee symbol '₹'.\n"
-                    "**Extraction Logic (Step-by-Step):**\n"
-                    "  1.  **Locate the Amount Box:** Scan the image to find the numeric amount box. Use the '₹' symbol as the primary anchor to find the start of this box. The amount will be to the right of this symbol.\n"
-                    "  2.  **Recognize Handwritten & Printed Digits:** The value inside can be handwritten, machine-printed, or a mix. Apply advanced OCR capable of handling diverse handwriting styles (e.g., looped '2' vs. 'Z'-like '2'; '7' with and without a bar; connected digits).\n"
-                    "  3.  **Handle Indian Numbering System:** Be aware that amounts are often written using the Indian system of commas (lakhs, crores), for example: `1,25,000` (one lakh twenty-five thousand) or `50,00,000` (fifty lakhs). These commas must be correctly identified and handled.\n"
-                    "  4.  **Identify Trailing Characters:** Cheque amounts in India frequently end with special characters like `/-`, `/-`, or `.00` to signify the end of the amount. You must recognize these but exclude them from the final numeric value.\n"
-                    "  5.  **Manage Corrections:** If you detect numbers that have been struck out and corrected, you MUST extract the final, corrected value. The presence of a correction should be noted in your reasoning for the confidence score.\n"
-                    "**Mandatory Cleaning & Standardization:**\n"
-                    "  * **Step A:** After OCR, extract the raw string (e.g., `\"₹ 1,25,000/-\"`).\n"
-                    "  * **Step B:** Programmatically remove ALL non-numeric characters EXCEPT for the decimal point ('.'). This includes removing:\n"
-                    "      - The Rupee symbol ('₹', 'Rs.', 'INR')\n"
-                    "      - ALL commas (`,`) \n"
-                    "      - Any trailing symbols (`/-`, `/-`, `=`) \n"
-                    "  * **Step C:** Convert the cleaned string to a number.\n"
-                    "  * **Step D:** Format the final output as a string with exactly two decimal places.\n"
-                    "**Output:** The final, cleaned, and standardized numeric amount as a string, formatted to two decimal places (e.g., `\"15000.00\"`)."
+                        "**Objective:** You are a hyper-precise OCR engine. Your task is to extract the numeric amount from a **pre-cropped image showing the 'courtesy amount' box of an Indian cheque.** This image will contain a **printed Rupee symbol ('₹') followed by handwritten or printed digits inside a rectangular box.**"
+                    "\n\n"
+                    "**CRITICAL INTERNAL PROCESS (Follow these steps before giving your answer):**"
+                    "\n"
+                    "1.  **Locate Anchor & Digits:** First, identify the Rupee symbol ('₹') as the primary anchor. The numeric amount you need to extract is the sequence of digits and related characters immediately to the right of this symbol."
+                    "\n"
+                    "2.  **Raw OCR Scan:** Mentally read the digits and symbols you have located."
+                    "\n"
+                    "3.  **Apply Strict Filtering Rule:** From your raw scan, you MUST discard ALL non-numeric characters. This includes the Rupee symbol (₹) itself, ALL commas (,), and ALL trailing symbols (like '/-', '=/'). The only non-digit character you may keep is a single decimal point (.)."
+                    "\n"
+                    "4.  **Correction Check:** Identify any struck-out numbers. You MUST use the final, corrected value."
+                    "\n"
+                    "5.  **Format for Standardization:** Take the cleaned number and format it to have exactly two decimal places. For example, '887' becomes '887.00'."
+                    "\n\n"
+                    "**FINAL OUTPUT INSTRUCTION:**"
+                    "\n"
+                    "Your final output MUST BE A SINGLE STRING representing the cleaned, standardized amount. "
+                    "Do NOT include your internal thoughts, labels, 'Rs.', or any other text. "
+                    "If the amount is unreadable, provide a single empty string: ''."
+                    "\n\n"
+                    "**Example Input:** The provided image showing the amount box."
+                    "**Example Output:** 887.00"
                 )
             }
             
@@ -269,12 +284,16 @@ class ChequeProcessor:
                         reask_result = json.loads(reask_json_str)
                         if reask_result.get("extracted_fields"):
                             new_field = reask_result["extracted_fields"][0]
-                            # Replace if the new result has a valid value and higher confidence
-                            if new_field.get("value") and new_field.get("confidence", 0.0) > current_field.get("confidence", 0.0):
+
+                            old_confidence = current_field.get("confidence", 0.0) if current_field else 0.0
+                            
+                            if new_field.get("value") and new_field.get("confidence", 0.0) > old_confidence:
                                 final_results_map[field_name] = new_field
                                 logger.info(f"reAsk for '{field_name}' succeeded with higher confidence for {file_path}.")
                     except (json.JSONDecodeError, IndexError):
                         logger.error(f"reAsk JSON parsing or processing failed for {file_path}. Response: {reask_json_str[:500]}...")
+
+                    print (final_results_map)
             
             return {
                 "extracted_fields": list(final_results_map.values())
@@ -296,7 +315,6 @@ class ChequeProcessor:
         
         fields_list_str = "\n\n".join(fields_with_descriptions)
 
-        # =========== FULL PROMPT TEXT RESTORED HERE ===========
         return f"""
         You are a hyper-specialized, state-of-the-art AI assistant, engineered with a singular focus: achieving near-perfect accuracy in information extraction from images of financial instruments, specifically Indian cheques. Your architecture integrates advanced multimodal understanding, leveraging sophisticated Optical Character Recognition (OCR) fine-tuned for both printed and handwritten text, and a deep, comprehensive knowledge base of global and Indian banking conventions. Your primary directive is to meticulously analyze the provided text representation of a cheque and extract predefined fields with the highest possible precision and confidence, operating under the assumption that you are a critical component in a high-stakes financial processing pipeline where errors have significant consequences.
 
