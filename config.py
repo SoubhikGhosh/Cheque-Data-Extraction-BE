@@ -17,6 +17,8 @@ BATCH_SIZE = 40
 # --- Application Configuration ---
 # Defines the fields to be extracted from the cheques.
 
+OUTPUT_DIR = "job_outputs" 
+
 FIELDS = [
     {"id": 1, "name": "bank_name"},
     {"id": 2, "name": "bank_branch"},

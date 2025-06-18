@@ -18,6 +18,8 @@ from vertexai.generative_models import GenerativeModel, Part
 import config
 import prompts
 import utils
+import shutil
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +118,8 @@ def process_zip_file_and_generate_report(job_id: str, file_contents: List[bytes]
                     logger.info(f"Job {job_id}: Progress {processed_count}/{total_files} ({job_status_dict['progress_percentage']:.2f}%)")
 
             # Step 4: Generate Excel Report
-            excel_path = os.path.join(output_dir, f"cheque_extraction_results_{job_id}.xlsx")
-            with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+            temp_excel_path = os.path.join(temp_dir, f"cheque_extraction_results_{job_id}.xlsx")
+            with pd.ExcelWriter(temp_excel_path, engine='xlsxwriter') as writer:
                 for folder_name, file_paths in folder_map.items():
                     # Filter results for the current folder
                     folder_results = [res for res in all_results if os.path.basename(os.path.dirname(res['file_path'])) == folder_name]
@@ -154,6 +156,12 @@ def process_zip_file_and_generate_report(job_id: str, file_contents: List[bytes]
                     sheet_name = re.sub(r'[\\/*?[\]:]', '_', folder_name)
                     sheet_name = (sheet_name[:28] + '...') if len(sheet_name) > 31 else sheet_name
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            persistent_excel_path = os.path.join(config.OUTPUT_DIR, f"cheque_extraction_results_{job_id}.xlsx")
+            
+            # Move the generated file from the temporary location to the persistent one
+            shutil.move(temp_excel_path, persistent_excel_path)
+            logger.info(f"Moved final report to persistent storage: {persistent_excel_path}")
             
             job_status_dict.update({
                 "status": "completed",

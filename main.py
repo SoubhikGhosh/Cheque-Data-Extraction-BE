@@ -21,6 +21,13 @@ from processing import process_zip_file_and_generate_report
 utils.configure_logging()
 logger = logging.getLogger(__name__)
 
+try:
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    logger.info(f"Ensured output directory exists at: ./{config.OUTPUT_DIR}")
+except OSError as e:
+    logger.error(f"Fatal Error: Could not create output directory ./{config.OUTPUT_DIR}. Error: {e}")
+
+
 # Initialize Vertex AI
 try:
     vertexai.init(
