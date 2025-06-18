@@ -6,12 +6,67 @@ import random
 import json
 import re
 import traceback
-from typing import List, Any
+from typing import List, Any, Optional
 
 from vertexai.generative_models import GenerativeModel
 from google.api_core import exceptions as google_exceptions
+from dateutil import parser
 
 logger = logging.getLogger(__name__)
+
+# --- NEW: Date Parsing Function ---
+def parse_and_format_date(date_str: Optional[str]) -> Optional[str]:
+    """
+    Parses a date string in almost any format and returns it as YYYY-MM-DD.
+    Uses dayfirst=True, assuming DD/MM/YYYY for ambiguous dates like 01/02/2024.
+
+    Args:
+        date_str: The raw date string from the LLM.
+
+    Returns:
+        A formatted date string "YYYY-MM-DD" or the original string if parsing fails.
+    """
+    if not date_str or not isinstance(date_str, str):
+        return date_str  # Return original if null, not a string, or empty
+
+    try:
+        # The dayfirst=True flag is crucial for Indian/European date formats
+        # It correctly interprets "04/05/2024" as May 4th, not April 5th.
+        parsed_date = parser.parse(date_str, dayfirst=True)
+        return parsed_date.strftime('%Y-%m-%d')
+    except (parser.ParserError, TypeError):
+        # If dateutil can't parse it, it might be a non-date string like "Not Found"
+        logger.warning(f"Could not parse date: '{date_str}'. Returning original value.")
+        return date_str
+
+# --- NEW: Amount Sanitization Function ---
+def sanitize_amount(amount_str: Optional[str]) -> Optional[str]:
+    """
+    Cleans an amount string to be a valid number.
+    - Removes all non-digit and non-period characters (like ₹, ,, -).
+    - Handles cases with multiple periods by keeping only the last one as a decimal separator.
+
+    Args:
+        amount_str: The raw amount string from the LLM.
+
+    Returns:
+        A cleaned numeric string or the original string if it's not processable.
+    """
+    if not amount_str or not isinstance(amount_str, str):
+        return amount_str # Return original if null, not a string, or empty
+
+    # Remove anything that is not a digit or a dot
+    cleaned_str = re.sub(r'[^\d.]', '', amount_str)
+    
+    # If multiple dots are present (e.g., "1.50.000.00"), re-assemble the number correctly.
+    # This joins all parts before the last dot and appends the last part.
+    if cleaned_str.count('.') > 1:
+        parts = cleaned_str.split('.')
+        cleaned_str = "".join(parts[:-1]) + "." + parts[-1]
+        
+    return cleaned_str
+
+# --- Existing functions below (no changes needed) ---
 
 def configure_logging():
     """Configures enhanced application-wide logging."""
@@ -23,6 +78,7 @@ def configure_logging():
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('google.auth').setLevel(logging.WARNING)
     logger.info("Logging configured.")
+
 
 def call_vertex_ai_with_retry(
     model_instance: GenerativeModel,
