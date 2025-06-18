@@ -1,12 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
-vertexai
-pandas
-openpyxl
-pillow
-pytesseract
-pdf2image
-uuid
-requests
 google-cloud-aiplatform
+pandas
+xlsxwriter
