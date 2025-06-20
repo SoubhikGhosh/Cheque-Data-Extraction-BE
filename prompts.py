@@ -1,11 +1,13 @@
 # /cheque_extraction_api/prompts.py
 
+import json
 from config import FIELDS
 
 def get_extraction_prompt() -> str:
     """
     Generates the detailed instruction prompt for the Vertex AI model.
-    It dynamically builds the field list from the config.
+    It dynamically builds the field list from the config, correctly formatting
+    both simple string prompts and complex dictionary/JSON prompts.
     """
     doc_fields = [field['name'] for field in FIELDS]
 
@@ -45,18 +47,58 @@ def get_extraction_prompt() -> str:
             "**Handling Special Formats:** Recognize that formats like PAYINST DRAFT or Manager's Cheques may lack explicit 'A/C No.' labels; rely on typical location for these formats.\n"
             "**Output:** The extracted account number sequence (digits/alphanumerics only), with separators removed. If definitively not present, output 'Not Found'."
         ),
-        "date": (
-            "**Objective:** Extract the issue date and standardize it.\n"
-            "**Primary Location Strategy:** Target the **top-right corner**, exclusively looking for the designated DD MM YYYY boxed areas.\n"
-            "**Input Format Handling:** Recognize and parse various common formats: DDMMYYYY (within boxes), DD/MM/YYYY, DD-MM-YY, DD.MM.YYYY, DD Mon YYYY, handwritten variations, dates printed over boxes, and partial pre-fills (e.g., printed '20__' with handwritten '24').\n"
-            "**Extraction Method:**\n"
-            "  1. Segment the Day (DD), Month (MM), and Year (YYYY/YY) components, specifically paying attention to the DD MM YYYY box structure.\n"
-            "  2. Apply specific OCR techniques for both printed and handwritten digits within the date area, with particular emphasis on differentiating visually similar characters such as '3' which can often resemble '8', '1' and '7', '4' and '9', '6'/'0', '5'/'S'.\n"
-            "  3. Employ robust image processing and segmentation to accurately read characters even when they are printed over or partially obscured by vertical or horizontal box lines.\n"
-            "  4. If multiple dates are present (e.g., stamp vs handwritten), prioritize the main handwritten/typed date in the designated boxes.\n"
-            "  5. **Temporal Validation:** The extracted date **cannot be a future date** relative to the current processing date. It must typically fall within the current calendar year or a recent past window (e.g., the last 6 months to 1 year). If a date is nonsensical (e.g., Feb 30th) or in the future, it should be flagged as problematic or result in a `null` extraction, with a reason.\n"
-            "**Output Format:** **Strictly YYYY-MM-DD.** Convert all valid inputs to this format."
-        ),
+        "date": {
+            "description": "Extract the cheque's issue date, applying a multi-stage protocol to resolve ambiguities and standardize the output.",
+            "instructions": {
+                "objective": "Accurately extract the issue date and standardize it to the YYYY-MM-DD format.",
+                "location_strategy": "Target the top-right corner, exclusively looking for the designated DD MM YYYY boxed areas.",
+                "hierarchical_extraction_protocol": [
+                    {
+                        "step": 1,
+                        "action": "Locate & Segment",
+                        "details": "Isolate the Day (DD), Month (MM), and Year (YYYY) components, using the box structure as the primary guide. Employ robust image processing to read characters even if they are printed over or partially obscured by the vertical/horizontal box lines."
+                    },
+                    {
+                        "step": 2,
+                        "action": "Initial Read & Low-Level Analysis",
+                        "details": "Perform an initial, high-precision OCR of the digits within each segment. During this read, apply the detailed 'Low-Level Digit & Handwriting Analysis' rules specified below."
+                    },
+                    {
+                        "step": 3,
+                        "action": "Handwriting Ambiguity Resolution",
+                        "details": "If any handwritten digit from the initial read is visually ambiguous, execute the following protocol:",
+                        "sub_rules": {
+                            "a": {
+                                "action": "Analyze Writer's Style",
+                                "detail": "Attempt to find other clearly written digits on the cheque by the same author to establish their unique handwriting style (e.g., how they form their '2's vs '4's)."
+                            },
+                            "b": {
+                                "action": "Apply Logical Constraints",
+                                "detail": "Verify that the potential interpretations are logical (e.g., Day must be <= 31, Month <= 12)."
+                            },
+                            "c": {
+                                "action": "Assign Confidence",
+                                "detail": "If ambiguity remains after analysis, the confidence score must be lowered significantly (< 0.85) and the specific reason for the ambiguity must be stated."
+                            }
+                        }
+                    },
+                    {
+                        "step": 4,
+                        "action": "Temporal Validation",
+                        "details": "The extracted date cannot be a future date relative to the current processing date (today, June 20, 2025). It must typically fall within a recent past window (e.g., last 3-6 months). Flag invalid or nonsensical dates (e.g., Feb 30th)."
+                    }
+                ],
+                "low_level_digit_handwriting_analysis": {
+                    "focus": "This analysis informs Step 2 and is the input for the ambiguity resolution in Step 3.",
+                    "rules": [
+                        "Apply specific OCR techniques for both printed and handwritten digits.",
+                        "Pay extreme attention to differentiating visually similar characters, including but not limited to: '3'/'8', '1'/'7', '4'/'9', '2', '6'/'0', '5'/'S'.",
+                        "Handle partial pre-fills correctly (e.g., a printed '20__' with a handwritten '25')."
+                    ]
+                },
+                "output": "The fully validated, standardized YYYY-MM-DD date string. If the date is invalid, make a guess to validate it."
+            }
+        },
         "payee_name": (
             "Objective: Extract the complete name and any associated payment instructions for the recipient (person or entity) to whom the cheque is payable.\n"
             "Primary Location Strategy: Target the text immediately following keywords such as 'PAY', 'Pay To', 'Pay to the order of', or 'Payee:'. This information is typically found on one or more lines situated below the bank's details and above the amount_words section.\n"
@@ -93,19 +135,49 @@ def get_extraction_prompt() -> str:
             "  5. Handle hyphenation and line breaks correctly if the amount spans multiple lines.\n"
             "**Output:** The full amount in words string."
         ),
-        "amount_numeric": (
-            "**Objective:** Extract the cheque amount written in figures (courtesy amount).\n"
-            "**Primary Location Strategy:** Target the designated box or area on the **right-middle side**, often clearly indicated by the Indian Rupee symbol (₹) or 'Rs.'.\n"
-            "**Format:** Numeric digits, potentially including thousands separators (,) and a decimal point (.). Commonly ends with '/-' or '.00'. The Indian Rupee symbol (₹) or 'Rs.' will typically be adjacent or precede the amount.\n"
-            "**Extraction Method:**\n"
-            "  1. Isolate the numeric digits within the designated amount box/area, along with any relevant decimal separators.\n"
-            "  2. Apply robust digit recognition, specifically trained on diverse Indian handwritten number styles, handling potential confusions (e.g., '1'/'7', '4'/'9', '2'/'Z', '3'/'8', '5'/'S', '6'/'0', '7'/'9', '8'/'B') and potential distortions from partial overwrites or smudges.\n"
-            "  3. **Crucially, PREPROCESS the extracted string:** Remove any Indian Rupee currency symbols (**₹**, **Rs.**, INR), thousands separators (,), and common trailing characters ('/-' or '.00' where the `.00` signifies no decimal value, retaining it if a fractional amount is present like `.50`).\n"
-            "  4. Retain the decimal separator (.) and subsequent digits if present (e.g., '1500.50').\n"
-            "  5. Standardize formats: For amounts with no fractional part, ensure consistency (e.g., '1500' or '1500.00'). For Indian cheques, always expect two digits after the decimal point if it exists.\n"
-            "  6. **Validate:** Use the recognized `amount_words` for strong cross-validation to ensure consistency and accuracy.\n"
-            "**Output:** The cleaned, purely numeric amount string (e.g., '1500.00', '1500.50', '12000')."
-        ),
+        "amount_numeric": {
+            "description": "Extract the cheque amount written in figures (courtesy amount) by applying a strict, multi-stage validation protocol.",
+            "instructions": {
+                "objective": "Extract the numeric amount with maximum precision, ensuring it is validated against the legal (words) amount and correctly formatted.",
+                "location_strategy": "Target the designated box or area on the right-middle side, often clearly indicated by a currency symbol (₹, Rs.).",
+                "hierarchical_extraction_protocol": [
+                    {
+                        "step": 1,
+                        "action": "Initial Read & Low-Level Analysis",
+                        "details": "Perform an initial, high-precision OCR of the numeric string within the amount box. During this read, apply the detailed 'Low-Level Digit & Handwriting Analysis' rules specified below to get the best possible initial interpretation of each digit."
+                    },
+                    {
+                        "step": 2,
+                        "action": "Mandatory Cross-Validation with Amount in Words",
+                        "details": "This is the most critical step. The `amount_words` field is the legally binding amount and MUST be used as the primary source of truth to confirm or correct the initial read.",
+                        "sub_rules": {
+                            "a": {
+                                "condition": "Ambiguous Handwritten Digit",
+                                "rule": "If any digit from the initial read is ambiguous (e.g., '8' vs '6', '1' vs '7') but the corresponding value in a clearly legible `amount_words` is unambiguous (e.g., '...Six'), the `amount_numeric` value MUST BE CONFORMED to match the `amount_words`. The corrected value takes precedence."
+                            },
+                            "b": {
+                                "condition": "Decimal/Paise Validation",
+                                "rule": "Analyze the `amount_words` for any explicit mention of 'Paise' or fractional units. If `amount_words` does NOT mention paise (e.g., '...Rupees Fifty only'), then any non-decimal fractional notation in the numeric box (like '-20' in '6083-20') MUST be disregarded as extraneous. If `amount_words` DOES mention paise, the numeric decimal must match."
+                            }
+                        }
+                    },
+                    {
+                        "step": 3,
+                        "action": "Final Cleaning & Standardization",
+                        "details": "Once the definitive numeric value is established, preprocess the string to remove all non-essential characters (e.g., currency symbols ₹/Rs., thousands separators ',', trailing characters like '/-') while retaining the validated decimal separator. Standardize the final output to a string with two decimal places (e.g., '1500.00', '48720.59')."
+                    }
+                ],
+                "low_level_digit_handwriting_analysis": {
+                    "focus": "This analysis informs Step 1 but is overridden by Step 2 in cases of conflict.",
+                    "rules": [
+                        "Apply robust digit recognition trained on diverse Indian handwritten number styles.",
+                        "Pay extreme attention to differentiating visually similar characters, including but not limited to: '1'/'7', '4'/'9', '2'/'Z', '3'/'8', '5'/'S', '6'/'0', '8'/'B'.",
+                        "Handle distortions from partial overwrites, smudges, or ink bleed on cheque security patterns."
+                    ]
+                },
+                "output": "The fully validated, cleaned, and standardized numeric amount string (e.g., '1500.00')."
+            }
+        },
         "issuer_name": (
             "Objective: Extract the name(s) of the account holder(s) or the company name issuing the cheque (payer).\n"
             "Primary Location Strategy: Search the area below the signature space, typically on the bottom-right, positioned above the MICR line. Also, check for printed company names, potentially located in the top-left quadrant under the bank details.\n"
@@ -233,12 +305,27 @@ def get_extraction_prompt() -> str:
             "**Output:** The standard 3-letter ISO 4217 currency code (e.g., 'INR', 'USD', 'EUR')."
         )
     }
-    
-    fields_with_descriptions = [
-        f"- : {field_descriptions.get(field, 'No description available.')}"
-        for field in doc_fields
-    ]
-    fields_list_str = "\n".join(fields_with_descriptions)
+
+    # This intelligent loop replaces the old, simple list comprehension.
+    # It correctly formats both simple strings and complex dictionary prompts.
+    fields_with_descriptions = []
+    for field in doc_fields:
+        description = field_descriptions.get(field)
+
+        if description is None:
+            formatted_description = "No description available."
+        elif isinstance(description, dict):
+            # If the prompt is a dictionary, pretty-print it as a JSON string
+            # This preserves the structure and readability for the AI model
+            formatted_description = json.dumps(description, indent=4)
+        else:
+            # Otherwise, treat it as a simple string (for backward compatibility)
+            formatted_description = str(description)
+
+        fields_with_descriptions.append(f"- {field}:\n{formatted_description}")
+
+    fields_list_str = "\n\n".join(fields_with_descriptions) # Use double newline for better separation
+
 
     return f"""
 You are an expert AI assistant specializing in high-accuracy information extraction from Indian bank cheque images. Your task is to meticulously analyze the provided cheque image and extract specific fields with maximum precision.
@@ -253,78 +340,78 @@ You are an expert AI assistant specializing in high-accuracy information extract
 
     1.  **Contextual Reasoning:** Apply deep contextual understanding. Use knowledge of cheque layouts, banking terminology (Indian and international), common payee names, and standard formats to interpret information correctly. Cross-validate information between fields (e.g., amount words vs. numeric amount, bank name vs. IFSC/MICR).
     2.  **Character Differentiation (Precision Focus):**
-        *   Actively disambiguate visually similar characters, especially numbers (e.g., '0'/'O', '1'/'I'/'l'/'7', '2'/'Z', '3'/'8', '4'/'9', '5'/'S', '6'/'0', '8'/'B', and punctuation like '.'/',' ';'/'/', '.-'). Pay extreme attention in critical fields like Account Numbers, MICR, IFSC, and Amounts.
-        *   Recognize common OCR ligatures/errors (e.g., 'rn' vs 'm', 'cl' vs 'd', 'vv' vs 'w') and correct them based on context.
-        *   Verify character types against field expectations (e.g., digits in `account_number`, `amount_numeric`, `micr_code`, `IFSC`; predominantly letters in names).
+        * Actively disambiguate visually similar characters, especially numbers (e.g., '0'/'O', '1'/'I'/'l'/'7', '2'/'Z', '3'/'8', '4'/'9', '5'/'S', '6'/'0', '8'/'B', and punctuation like '.'/',' ';'/'/', '.-'). Pay extreme attention in critical fields like Account Numbers, MICR, IFSC, and Amounts.
+        * Recognize common OCR ligatures/errors (e.g., 'rn' vs 'm', 'cl' vs 'd', 'vv' vs 'w') and correct them based on context.
+        * Verify character types against field expectations (e.g., digits in `account_number`, `amount_numeric`, `micr_code`, `IFSC`; predominantly letters in names).
     3.  **Advanced Handwriting Analysis:**
-        *   Employ sophisticated handwriting recognition models capable of handling diverse styles (cursive, print, mixed), varying slant, inconsistent spacing/size, loops, pressure points, and potential overlaps or incompleteness.
-        *   Specifically address challenges in handwritten: `payee_name`, `amount_words`, `amount_numeric`, `date`, `issuer_name`, and `signature_present` assessment.
-        *   Accurately interpret handwritten numbers, distinguishing styles for '1'/'7', '4'/'9', '2', etc., even when connected.
-        *   Handle corrections (strikethroughs): Prioritize the final, intended value, not the crossed-out text. If a date is corrected, extract the corrected date.
+        * Employ sophisticated handwriting recognition models capable of handling diverse styles (cursive, print, mixed), varying slant, inconsistent spacing/size, loops, pressure points, and potential overlaps or incompleteness.
+        * Specifically address challenges in handwritten: `payee_name`, `amount_words`, `amount_numeric`, `date`, `issuer_name`, and `signature_present` assessment.
+        * Accurately interpret handwritten numbers, distinguishing styles for '1'/'7', '4'/'9', '2', etc., even when connected.
+        * Handle corrections (strikethroughs): Prioritize the final, intended value, not the crossed-out text. If a date is corrected, extract the corrected date.
     4.  **Multilingual & Mixed-Script Processing:**
-        *   Accurately identify and transcribe text in multiple languages, primarily English and major Indian languages (Hindi, Kannada, Telugu, Tamil, Punjabi, Bengali, etc.).
-        *   Specify the detected language for fields prone to multilingual content (`payee_name`, `amount_words`, `issuer_name`) if not English.
-        *   Apply script-specific character differentiation rules (e.g., Devanagari ण/ज़, த/த; Tamil ன/ண, ர/ற; similar forms in Telugu/Kannada/Bengali/Assamese).
-        *   Handle code-switching (mixing scripts/languages) within a single field value where appropriate.
-        *   Recognize and correctly transcribe Indian language numerals if present.
+        * Accurately identify and transcribe text in multiple languages, primarily English and major Indian languages (Hindi, Kannada, Telugu, Tamil, Punjabi, Bengali, etc.).
+        * Specify the detected language for fields prone to multilingual content (`payee_name`, `amount_words`, `issuer_name`) if not English.
+        * Apply script-specific character differentiation rules (e.g., Devanagari ण/ज़, த/த; Tamil ன/ண, ர/ற; similar forms in Telugu/Kannada/Bengali/Assamese).
+        * Handle code-switching (mixing scripts/languages) within a single field value where appropriate.
+        * Recognize and correctly transcribe Indian language numerals if present.
     5.  **MICR Code Extraction:**
-        *   Target the E-13B font sequence at the cheque bottom.
-        *   Extract **digits only (0-9)**. Explicitly **exclude** any non-digit symbols or delimiters (like ⑆, ⑈, ⑇).
-        *   Validate the typical 9-digit structure for Indian cheques (CCCBBBAAA - City, Bank, Branch). Note variations if necessary.
-        *   Ensure high confidence differentiation of MICR's unique blocky characters.
+        * Target the E-13B font sequence at the cheque bottom.
+        * Extract **digits only (0-9)**. Explicitly **exclude** any non-digit symbols or delimiters (like ⑆, ⑈, ⑇).
+        * Validate the typical 9-digit structure for Indian cheques (CCCBBBAAA - City, Bank, Branch). Note variations if necessary.
+        * Ensure high confidence differentiation of MICR's unique blocky characters.
     6.  **Date Extraction & Standardization:**
-        *   Locate the date, typically top-right.
-        *   Recognize various formats (DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD-Mon-YYYY, etc.) including handwritten variations.
-        *   Handle partial pre-fills (e.g., printed "20" followed by handwritten "24").
-        *   Accurately parse day, month, and year, resolving ambiguity using context (assume DD/MM for India unless clearly otherwise) and proximity to the likely processing date (cheques are typically valid for 3-6 months).
-        *   Standardize the final output strictly to **YYYY-MM-DD** format. If the date is invalid or ambiguous (e.g., Feb 30), flag it.
+        * Locate the date, typically top-right.
+        * Recognize various formats (DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD-Mon-YYYY, etc.) including handwritten variations.
+        * Handle partial pre-fills (e.g., printed "20" followed by handwritten "24").
+        * Accurately parse day, month, and year, aresolving ambiguity using context (assume DD/MM for India unless clearly otherwise) and proximity to the likely processing date (cheques are typically valid for 3-6 months).
+        * Standardize the final output strictly to **YYYY-MM-DD** format. If the date is invalid or ambiguous (e.g., Feb 30), flag it.
     7.  **Amount Validation:** Ensure `amount_numeric` and `amount_words` correspond logically. Note discrepancies if unavoidable. Extract numeric amount precisely, including decimals if present.
     8.  **Signature Detection:** Assess the presence of handwritten, free-flowing ink strokes in the typical signature area (bottom right, above MICR). Output only "YES" or "NO". Do not attempt to read the signature text itself for the `signature_present` field.
 
     **Confidence Scoring (Strict, Character-Informed):**
 
-    *   **Core Principle:** The overall confidence score for each field MUST reflect the system's certainty about **every single character** comprising the extracted value. The field's confidence is heavily influenced by the *lowest* confidence assigned to any of its critical constituent characters or segments during the OCR/interpretation process.
-    *   **Scale:** Assign a confidence score (float, 0.00 to 1.00) for each extracted field.
-    *   **Calculation Basis:** This score integrates:
-        *   OCR engine's internal character-level confidence values.
-        *   Visual clarity and quality of the source text segment.
-        *   Ambiguity checks (e.g., similar characters like 0/O, 1/I).
-        *   Handwriting legibility (individual strokes, connections).
-        *   Adherence to expected field format and context (e.g., a potential 'O' in a numeric field drastically lowers confidence).
-        *   Cross-validation results (e.g., amount words vs. numeric).
-    *   **Strict Benchmarks:**
-        *   **0.98 - 1.00 (Very High):** Near certainty. All characters are perfectly clear, unambiguous, well-formed (print or handwriting), and fully context-compliant. No plausible alternative interpretation exists for any character.
-        *   **0.90 - 0.97 (High):** Strong confidence. All characters are clearly legible, but minor imperfections might exist (e.g., slight slant, minor ink variation) OR very low-probability alternative character interpretations exist but are strongly ruled out by context.
-        *   **0.75 - 0.89 (Moderate):** Reasonable confidence, but with specific, identifiable uncertainties. This applies if:
-            *   One or two characters have moderate ambiguity (e.g., a handwritten '1' that *could* be a '7', a slightly unclear 'S' vs '5').
-            *   Minor OCR segmentation issues were overcome (e.g., slightly touching characters).
-            *   Legible but challenging handwriting style for a character or two.
-        *   **0.50 - 0.74 (Low):** Significant uncertainty exists. This applies if:
-            *   Multiple characters are ambiguous or difficult to read.
-            *   Poor print quality (faded, smudged) affects key characters.
-            *   Highly irregular or barely legible handwriting is involved.
-            *   Strong conflicts exist (e.g., amount words clearly mismatch numeric, but an extraction is still attempted).
-        *   **< 0.50 (Very Low / Unreliable):** Extraction is highly speculative or impossible. The field value is likely incorrect or incomplete. Assign this if the text is largely illegible, completely missing, or fails critical format validation.
-    *   **Confidence Justification:** **Mandatory** for any score below **0.95**. Briefly explain the *primary reason* for the reduced confidence, referencing specific character ambiguities, handwriting issues, print quality, or contextual conflicts (e.g., "Moderate: Handwritten '4' resembles '9'", "Low: MICR digits '8' and '0' partially smudged", "High: Minor ambiguity between 'O'/'0' in Acc No, resolved by numeric context").
-    *   **Handwriting Impact:** Directly link handwriting quality to character confidence. Even if a word is *generally* readable, confidence drops if individual letters require significant interpretation effort. Corrections/strikethroughs automatically cap confidence unless the final value is exceptionally clear.
+    * **Core Principle:** The overall confidence score for each field MUST reflect the system's certainty about **every single character** comprising the extracted value. The field's confidence is heavily influenced by the *lowest* confidence assigned to any of its critical constituent characters or segments during the OCR/interpretation process.
+    * **Scale:** Assign a confidence score (float, 0.00 to 1.00) for each extracted field.
+    * **Calculation Basis:** This score integrates:
+        * OCR engine's internal character-level confidence values.
+        * Visual clarity and quality of the source text segment.
+        * Ambiguity checks (e.g., similar characters like 0/O, 1/I).
+        * Handwriting legibility (individual strokes, connections).
+        * Adherence to expected field format and context (e.g., a potential 'O' in a numeric field drastically lowers confidence).
+        * Cross-validation results (e.g., amount words vs. numeric).
+    * **Strict Benchmarks:**
+        * **0.98 - 1.00 (Very High):** Near certainty. All characters are perfectly clear, unambiguous, well-formed (print or handwriting), and fully context-compliant. No plausible alternative interpretation exists for any character.
+        * **0.90 - 0.97 (High):** Strong confidence. All characters are clearly legible, but minor imperfections might exist (e.g., slight slant, minor ink variation) OR very low-probability alternative character interpretations exist but are strongly ruled out by context.
+        * **0.75 - 0.89 (Moderate):** Reasonable confidence, but with specific, identifiable uncertainties. This applies if:
+            * One or two characters have moderate ambiguity (e.g., a handwritten '1' that *could* be a '7', a slightly unclear 'S' vs '5').
+            * Minor OCR segmentation issues were overcome (e.g., slightly touching characters).
+            * Legible but challenging handwriting style for a character or two.
+        * **0.50 - 0.74 (Low):** Significant uncertainty exists. This applies if:
+            * Multiple characters are ambiguous or difficult to read.
+            * Poor print quality (faded, smudged) affects key characters.
+            * Highly irregular or barely legible handwriting is involved.
+            * Strong conflicts exist (e.g., amount words clearly mismatch numeric, but an extraction is still attempted).
+        * **< 0.50 (Very Low / Unreliable):** Extraction is highly speculative or impossible. The field value is likely incorrect or incomplete. Assign this if the text is largely illegible, completely missing, or fails critical format validation.
+    * **Confidence Justification:** **Mandatory** for any score below **0.95**. Briefly explain the *primary reason* for the reduced confidence, referencing specific character ambiguities, handwriting issues, print quality, or contextual conflicts (e.g., "Moderate: Handwritten '4' resembles '9'", "Low: MICR digits '8' and '0' partially smudged", "High: Minor ambiguity between 'O'/'0' in Acc No, resolved by numeric context").
+    * **Handwriting Impact:** Directly link handwriting quality to character confidence. Even if a word is *generally* readable, confidence drops if individual letters require significant interpretation effort. Corrections/strikethroughs automatically cap confidence unless the final value is exceptionally clear.
     
     **Error Handling:**
 
-    *   If a field cannot be found or reliably extracted, set its value to `null` or an empty string, assign a low confidence score (e.g., < 0.5), and provide a specific `reason` (e.g., "Field not present", "Illegible handwriting", "Smudged area", "OCR segmentation failed").
+    * If a field cannot be found or reliably extracted, set its value to `null` or an empty string, assign a low confidence score (e.g., < 0.5), and provide a specific `reason` (e.g., "Field not present", "Illegible handwriting", "Smudged area", "OCR segmentation failed").
 
     **Output Format:**
 
-    *   Your response **MUST** be a single, valid JSON object.
-    *   **Do NOT** include any explanatory text, markdown formatting, or anything outside the JSON structure.
-    *   The JSON should have two top-level keys:
+    * Your response **MUST** be a single, valid JSON object.
+    * **Do NOT** include any explanatory text, markdown formatting, or anything outside the JSON structure.
+    * The JSON should have two top-level keys:
         1.  `"full_text"`: A string containing the entire OCR text extracted from the cheque, as accurately as possible.
         2.  `"extracted_fields"`: An array of objects. Each object represents an extracted field and must contain:
-            *   `"field_name"`: The name of the field (string, e.g., "bank_name").
-            *   `"value"`: The extracted value (string, number, or boolean for `signature_present`). Standardize date to "YYYY-MM-DD". Null or "" if not found/extractable.
-            *   `"confidence"`: The confidence score (float, 0.0-1.0).
-            *   `"text_segment"`: The exact text substring from the source OCR corresponding to the extracted value (string). Null if not applicable.
-            *   `"reason"`: A brief reason if the field could not be extracted or confidence is low (string). Null or empty otherwise.
-            *   `"language"`: (Optional, but preferred for `payee_name`, `amount_words`, `issuer_name`) The detected language of the extracted value (string, e.g., "English", "Hindi", "Tamil"). Null if not applicable or detection failed.
+            * `"field_name"`: The name of the field (string, e.g., "bank_name").
+            * `"value"`: The extracted value (string, number, or boolean for `signature_present`). Standardize date to "YYYY-MM-DD". Null or "" if not found/extractable.
+            * `"confidence"`: The confidence score (float, 0.0-1.0).
+            * `"text_segment"`: The exact text substring from the source OCR corresponding to the extracted value (string). Null if not applicable.
+            * `"reason"`: A brief reason if the field could not be extracted or confidence is low (string). Null or empty otherwise.
+            * `"language"`: (Optional, but preferred for `payee_name`, `amount_words`, `issuer_name`) The detected language of the extracted value (string, e.g., "English", "Hindi", "Tamil"). Null if not applicable or detection failed.
 
     **Example extracted_fields object will contain all these fields with example values like:
         "field_name": "amount_numeric",
