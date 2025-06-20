@@ -10,9 +10,9 @@ MODEL_NAME = "gemini-1.5-flash-002"
 
 # --- Performance Configuration ---
 # Maximum number of concurrent threads to process images.
-MAX_WORKERS = 80
+MAX_WORKERS = 120
 # Number of images to process in a single batch.
-BATCH_SIZE = 40
+BATCH_SIZE = 60
 
 # --- Application Configuration ---
 # Defines the fields to be extracted from the cheques.
