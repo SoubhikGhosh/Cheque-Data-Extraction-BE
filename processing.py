@@ -165,11 +165,11 @@ def process_zip_file_and_generate_report(job_id: str, file_contents: List[bytes]
             
             job_status_dict.update({
                 "status": "completed",
-                "output_file_path": excel_path,
+                "output_file_path": temp_excel_path,
                 "end_time": time.time(),
                 "processing_time": time.time() - job_start_time,
             })
-            logger.info(f"Job {job_id} completed successfully. Report at {excel_path}")
+            logger.info(f"Job {job_id} completed successfully. Report at {temp_excel_path}")
 
     except Exception as e:
         logger.error(f"Critical error in job {job_id}: {e}")
