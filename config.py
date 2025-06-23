@@ -14,6 +14,16 @@ MAX_WORKERS = 120
 # Number of images to process in a single batch.
 BATCH_SIZE = 60
 
+# --- Vertex AI Generation Configuration ---
+# This configuration ensures the model provides a more deterministic
+# and structured JSON output.
+# - temperature=0.0 makes the output less random.
+# - response_mime_type="application/json" forces the model to output a JSON object.
+GENERATION_CONFIG = {
+    "temperature": 0.0,
+    "response_mime_type": "application/json",
+}
+
 # --- Application Configuration ---
 # Defines the fields to be extracted from the cheques.
 

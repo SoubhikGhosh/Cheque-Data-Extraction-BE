@@ -40,7 +40,11 @@ def process_single_document(file_info: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Starting processing for: {os.path.basename(file_path)}")
 
     try:
-        model = GenerativeModel(config.MODEL_NAME, safety_settings=config.SAFETY_SETTINGS)
+        model = GenerativeModel(
+            config.MODEL_NAME, 
+            safety_settings=config.SAFETY_SETTINGS,
+            generation_config=config.GENERATION_CONFIG 
+            )
         file_part = Part.from_data(data=file_data, mime_type=file_type)
         extraction_prompt = prompts.get_extraction_prompt()
 
