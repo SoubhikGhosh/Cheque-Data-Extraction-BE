@@ -6,7 +6,7 @@ from vertexai.generative_models import SafetySetting
 GCP_PROJECT_ID = "hbl-uat-ocr-fw-app-prj-spk-4d"
 GCP_LOCATION = "asia-south1"
 API_ENDPOINT = "asia-south1-aiplatform.googleapis.com"
-MODEL_NAME = "gemini-1.5-flash-002"
+MODEL_NAME = "gemini-2.5-flash"
 
 # --- Performance Configuration ---
 # Maximum number of concurrent threads to process images.
